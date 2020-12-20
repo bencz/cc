@@ -1,7 +1,3 @@
-//
-// -- Download all the include files and compiled binary
-// -- https://drive.google.com/folderview?id=0B1nFzHmmj-jCaUJiVTVZUXd5WVk&usp
-//
 #include <ctype.h>
 #include <io.h>
 #include <stdio.h>
