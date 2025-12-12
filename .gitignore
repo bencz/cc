@@ -1,0 +1,19 @@
+# Build artifacts
+*.o
+*.exe
+*.dll
+
+# Compiler output
+cc
+cc.exe
+
+
+# Editor files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
