@@ -167,19 +167,73 @@ make hlasm
 
 ### Register Mapping
 
-| x86 Virtual | z/Architecture |
-|-------------|----------------|
-| EAX         | R2             |
-| ECX         | R3             |
-| EDX         | R4             |
-| EBP (stack) | R11            |
-| ESP (stack) | R13            |
+#### General Purpose Registers (GPR)
 
-### z/OS Conventions
-- R1: Parameter list
-- R13: Save area pointer
-- R14: Return address
-- R15: Entry point / return code
+| x86 Virtual | z/Architecture | Usage                    |
+|-------------|----------------|--------------------------|
+| EAX         | R2             | Accumulator, return value|
+| ECX         | R3             | Counter                  |
+| EDX         | R4             | Data                     |
+| EBP         | R11            | Frame pointer            |
+| ESP         | R13            | Save area pointer        |
+
+#### Floating Point Registers (FPR)
+
+| Register | Usage                              |
+|----------|------------------------------------|
+| F0       | Primary FPU operations, return     |
+| F2       | Secondary operand                  |
+| F4, F6   | Additional work registers          |
+| F8-F15   | Callee-saved                       |
+
+### z/OS Calling Conventions
+
+**Parameter Passing:**
+- Parameters passed via list pointed by R1
+- Each entry is a pointer to the argument
+- Last pointer has VL bit set (high-order bit = 1)
+
+**Return Values:**
+- Integer return in R15
+- Float/double return in F0
+
+**Save Area (72 bytes):**
+```
+Offset  Content
++0      Reserved
++4      Pointer to previous save area
++8      Pointer to next save area
++12     R14 (return address)
++16     R15 (entry point)
++20     R0-R12 (13 registers × 4 bytes)
+```
+
+**Register Preservation:**
+- R0-R4: Not preserved (work registers)
+- R5-R10: Preserved by callee
+- R11-R14: Preserved by callee
+- R15: Not preserved (return code)
+
+### Floating Point Support
+
+The backend supports IEEE floating point operations using z/Architecture BFP instructions:
+
+| Operation        | HLASM Instruction |
+|------------------|-------------------|
+| Load double      | LD                |
+| Store double     | STD               |
+| Add              | AD / ADR          |
+| Subtract         | SD / SDR          |
+| Multiply         | MD / MDR          |
+| Divide           | DD / DDR          |
+| Compare          | CD / CDR          |
+| Negate           | LCDR              |
+| Int → Double     | CDFBR             |
+| Double → Int     | CFDBR             |
+
+### String Encoding
+
+The backend includes automatic ASCII to EBCDIC conversion for string literals, as z/OS uses EBCDIC as its native character encoding.
 
 ## Architecture
 
