@@ -227,4 +227,8 @@ make hlasm
 
 ## License
 
-This project is provided as-is for educational purposes.
+This project is licensed under the **Unlicense** - a public domain dedication.
+
+This means you can copy, modify, distribute and perform the work, even for commercial purposes, all without asking permission.
+
+See the [LICENSE](LICENSE) file for details, or visit: https://unlicense.org/

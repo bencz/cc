@@ -636,6 +636,25 @@ void hlasm_translate(void)
                 emit("         LTR   2,2");
                 break;
                 
+            case test_ah:
+                /* Test AH register - in z/Arch, test high byte of R2 */
+                /* AH corresponds to bits 8-15 of EAX (R2) */
+                emit("         LR    0,2              Copy R2 to R0");
+                emit("         SRL   0,8              Shift right 8 bits");
+                emit("         N     0,=X'000000%02X' AND with mask", num);
+                emit("         LTR   0,0              Set condition code");
+                break;
+                
+            case mov_psp_eax:
+                /* mov [esp+offset],eax - Store to stack */
+                emit("         ST    2,%d(,13)        Store to stack", num);
+                break;
+                
+            case mov_eax_psp:
+                /* mov eax,[esp+offset] - Load from stack */
+                emit("         L     2,%d(,13)        Load from stack", num);
+                break;
+                
             case jmp:
                 format_label(label_buf, num);
                 emit("         B     %s", label_buf);
