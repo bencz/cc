@@ -79,7 +79,10 @@ static void procDefine(char *str, HASH *pHash)
 {
 	char *p = strtok(str, " \t");
 	char *q = strtok(NULL, "");
-	while (*q <= ' ') q++;
+	if (q == NULL)
+		q = "";
+	else
+		while (*q && *q <= ' ') q++;
 	put(p, q, pHash);
 }
 
