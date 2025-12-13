@@ -93,7 +93,7 @@ int sizeOfDataType(int type)
 int isTypeSpecifier(int ix)
 {
 	int hix = cd.token[ix].ival;
-	return cd.token[ix].type == TK_NAME && ((int)cd.hash.tbl[hix].val)&AT_TYPE;
+	return cd.token[ix].type == TK_NAME && ((intptr_t)cd.hash.tbl[hix].val)&AT_TYPE;
 }
 
 /*============================================================================
@@ -539,7 +539,7 @@ void structDeclaration(void)
 	int nameId = cd.token[ix.tix++].ival;
 	pName->dataType = nameId;
 	putName(globTable, pName);
-	cd.hash.tbl[nameId].val = (void*)((int)cd.hash.tbl[nameId].val | AT_TYPE);
+	cd.hash.tbl[nameId].val = (void*)((intptr_t)cd.hash.tbl[nameId].val | AT_TYPE);
 	skip(';');
 }
 

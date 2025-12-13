@@ -19,13 +19,13 @@ compare_doubles DS    0H
          LR    11,13             R11 = frame pointer (ebp)
 *        R1 contains parameter list pointer
 *        Parameters accessed via: L Rx,0(,1) for 1st, L Rx,4(,1) for 2nd, etc.
-         LD    0,80(,11)        Load double from stack
-         LD    0,88(,11)        Load double from stack
+         LD    0,80(,11)        Load double BFP from stack
+         LD    0,88(,11)        Load double BFP from stack
          LDR   4,0              F4 = F0 (temp)
          LDR   0,2              F0 = F2
          LDR   2,4              F2 = F4 (old F0)
-         CDR   0,2              Compare F0 with F2
-* FPU status word - condition code already set by CDR
+         CDBR  0,2              Compare F0 with F2 (BFP)
+* FPU status word - condition code already set by CDBR
          LR    0,2              Copy R2 to R0
          SRL   0,8              Shift right 8 bits
          N     0,=X'00000045' AND with mask
@@ -38,10 +38,10 @@ compare_doubles DS    0H
          LM    14,12,12(13)      Restore registers R14-R12
          BR    14                Return to caller
 L0001    DS    0H
-         LD    0,80(,11)        Load double from stack
-         LD    0,88(,11)        Load double from stack
-         CDR   0,2              Compare F0 with F2
-* FPU status word - condition code already set by CDR
+         LD    0,80(,11)        Load double BFP from stack
+         LD    0,88(,11)        Load double BFP from stack
+         CDBR  0,2              Compare F0 with F2 (BFP)
+* FPU status word - condition code already set by CDBR
          LR    0,2              Copy R2 to R0
          SRL   0,8              Shift right 8 bits
          N     0,=X'00000045' AND with mask
@@ -76,19 +76,19 @@ main     DS    0H
 *        R1 contains parameter list pointer
 *        Parameters accessed via: L Rx,0(,1) for 1st, L Rx,4(,1) for 2nd, etc.
          AHI   13,-36
-         LD    0,=D'0'         Load double constant
+         LD    0,=DB'0'        Load double BFP constant
          STD   0,64(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,=D'8'         Load double constant
+         LD    0,=DB'8'        Load double BFP constant
          STD   0,56(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,=D'16'         Load double constant
+         LD    0,=DB'16'        Load double BFP constant
          STD   0,48(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,56(,11)        Load double from stack
+         LD    0,56(,11)        Load double BFP from stack
          AHI   13,-8
          STD   0,0(,13)         Store and pop to stack
-         LD    0,64(,11)        Load double from stack
+         LD    0,64(,11)        Load double BFP from stack
          AHI   13,-8
          STD   0,0(,13)         Store and pop to stack
 *        Call function: compare_doubles
@@ -97,10 +97,10 @@ main     DS    0H
          LR    2,15             Copy return value to R2 (eax)
          AHI   13,16
          ST    2,44(,11)
-         LD    0,64(,11)        Load double from stack
+         LD    0,64(,11)        Load double BFP from stack
          AHI   13,-8
          STD   0,0(,13)         Store and pop to stack
-         LD    0,56(,11)        Load double from stack
+         LD    0,56(,11)        Load double BFP from stack
          AHI   13,-8
          STD   0,0(,13)         Store and pop to stack
 *        Call function: compare_doubles
@@ -109,10 +109,10 @@ main     DS    0H
          LR    2,15             Copy return value to R2 (eax)
          AHI   13,16
          ST    2,40(,11)
-         LD    0,48(,11)        Load double from stack
+         LD    0,48(,11)        Load double BFP from stack
          AHI   13,-8
          STD   0,0(,13)         Store and pop to stack
-         LD    0,64(,11)        Load double from stack
+         LD    0,64(,11)        Load double BFP from stack
          AHI   13,-8
          STD   0,0(,13)         Store and pop to stack
 *        Call function: compare_doubles
@@ -161,9 +161,9 @@ _main    DS    0H
 *
 * Data Section
 *
-         DC    D'10.500000'
-         DC    D'3.200000'
-         DC    D'10.500000'
+         DC    DB'10.500000'
+         DC    DB'3.200000'
+         DC    DB'10.500000'
 *
 * Work Areas
 *

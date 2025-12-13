@@ -28,20 +28,20 @@ main     DS    0H
          CDFBR 0,0              Convert fixed to long BFP
          STD   0,56(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,=D'0'         Load double constant
+         LD    0,=DB'0'        Load double BFP constant
          STD   0,48(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,48(,11)        Load double from stack
+         LD    0,48(,11)        Load double BFP from stack
 * FPU control word - not applicable to z/Arch
          CFDBR 0,5,0            Convert long BFP to fixed (truncate)
          ST    0,-4(,13)        Store integer to stack
          L     2,-4(,13)        Load from stack
 * FPU control word - not applicable to z/Arch
          ST    2,44(,11)
-         LD    0,=D'8'         Load double constant
+         LD    0,=DB'8'        Load double BFP constant
          STD   0,32(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,32(,11)        Load double from stack
+         LD    0,32(,11)        Load double BFP from stack
 * FPU control word - not applicable to z/Arch
          CFDBR 0,5,0            Convert long BFP to fixed (truncate)
          ST    0,-4(,13)        Store integer to stack
@@ -87,8 +87,8 @@ _main    DS    0H
 *
 * Data Section
 *
-         DC    D'3.141590'
-         DC    D'-7.800000'
+         DC    DB'3.141590'
+         DC    DB'-7.800000'
 *
 * Work Areas
 *

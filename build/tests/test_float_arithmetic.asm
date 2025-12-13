@@ -20,33 +20,33 @@ main     DS    0H
 *        R1 contains parameter list pointer
 *        Parameters accessed via: L Rx,0(,1) for 1st, L Rx,4(,1) for 2nd, etc.
          AHI   13,-60
-         LD    0,=D'0'         Load double constant
+         LD    0,=DB'0'        Load double BFP constant
          STD   0,64(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,=D'8'         Load double constant
+         LD    0,=DB'8'        Load double BFP constant
          STD   0,56(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,64(,11)        Load double from stack
-         AD    0,56(,11)        Add double from stack
+         LD    0,64(,11)        Load double BFP from stack
+         ADB   0,56(,11)        Add double BFP from stack
          STD   0,48(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,64(,11)        Load double from stack
-         SD    0,56(,11)        Sub double from stack
+         LD    0,64(,11)        Load double BFP from stack
+         SDB   0,56(,11)        Sub double BFP from stack
          STD   0,40(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,64(,11)        Load double from stack
-         MD    0,56(,11)        Mul double from stack
+         LD    0,64(,11)        Load double BFP from stack
+         MDB   0,56(,11)        Mul double BFP from stack
          STD   0,32(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,64(,11)        Load double from stack
-         DD    0,56(,11)        Div double from stack
+         LD    0,64(,11)        Load double BFP from stack
+         DDB   0,56(,11)        Div double BFP from stack
          STD   0,24(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,64(,11)        Load double from stack
-         LCDR  0,0              Negate F0
+         LD    0,64(,11)        Load double BFP from stack
+         LCDBR 0,0              Negate F0 (BFP)
          STD   0,16(,11)        Store double to stack
          LDR   2,0              Copy F0 to F2 (pop)
-         LD    0,48(,11)        Load double from stack
+         LD    0,48(,11)        Load double BFP from stack
 * FPU control word - not applicable to z/Arch
          CFDBR 0,5,0            Convert long BFP to fixed (truncate)
          ST    0,-4(,13)        Store integer to stack
@@ -88,8 +88,8 @@ _main    DS    0H
 *
 * Data Section
 *
-         DC    D'100.500000'
-         DC    D'25.250000'
+         DC    DB'100.500000'
+         DC    DB'25.250000'
 *
 * Work Areas
 *

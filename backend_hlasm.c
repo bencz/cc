@@ -124,128 +124,6 @@ typedef enum {
 #define STACK_FRAME_BASE 72  /* Após save area de 18 fullwords */
 
 /*============================================================================
- * Estrutura para instrução HLASM
- *============================================================================*/
-
-typedef struct _HLASM_INST {
-    int  opcode;
-    char *mnemonic;
-    char *format;      /* RR, RX, RS, SI, SS, etc */
-    int  length;       /* 2, 4, or 6 bytes */
-} HLASM_INST;
-
-/*============================================================================
- * Tabela de Instruções HLASM (subset)
- * 
- * Formato das instruções z/Architecture:
- * - RR: Register-Register (2 bytes)
- * - RX: Register-Index-Base-Displacement (4 bytes)
- * - RS: Register-Register-Storage (4 bytes)
- * - SI: Storage-Immediate (4 bytes)
- * - SS: Storage-Storage (6 bytes)
- *============================================================================*/
-
-static HLASM_INST hlasm_inst[] = {
-    /* Instruções de Load/Store */
-    { 0x18, "LR",    "RR", 2 },    /* Load Register */
-    { 0x58, "L",     "RX", 4 },    /* Load */
-    { 0x50, "ST",    "RX", 4 },    /* Store */
-    { 0x48, "LH",    "RX", 4 },    /* Load Halfword */
-    { 0x40, "STH",   "RX", 4 },    /* Store Halfword */
-    { 0x43, "IC",    "RX", 4 },    /* Insert Character */
-    { 0x42, "STC",   "RX", 4 },    /* Store Character */
-    { 0x41, "LA",    "RX", 4 },    /* Load Address */
-    
-    /* Instruções Aritméticas */
-    { 0x1A, "AR",    "RR", 2 },    /* Add Register */
-    { 0x5A, "A",     "RX", 4 },    /* Add */
-    { 0x1B, "SR",    "RR", 2 },    /* Subtract Register */
-    { 0x5B, "S",     "RX", 4 },    /* Subtract */
-    { 0x1C, "MR",    "RR", 2 },    /* Multiply Register */
-    { 0x5C, "M",     "RX", 4 },    /* Multiply */
-    { 0x1D, "DR",    "RR", 2 },    /* Divide Register */
-    { 0x5D, "D",     "RX", 4 },    /* Divide */
-    
-    /* Instruções Lógicas */
-    { 0x14, "NR",    "RR", 2 },    /* AND Register */
-    { 0x54, "N",     "RX", 4 },    /* AND */
-    { 0x16, "OR",    "RR", 2 },    /* OR Register */
-    { 0x56, "O",     "RX", 4 },    /* OR */
-    { 0x17, "XR",    "RR", 2 },    /* XOR Register */
-    { 0x57, "X",     "RX", 4 },    /* XOR */
-    
-    /* Instruções de Comparação */
-    { 0x19, "CR",    "RR", 2 },    /* Compare Register */
-    { 0x59, "C",     "RX", 4 },    /* Compare */
-    { 0x15, "CLR",   "RR", 2 },    /* Compare Logical Register */
-    { 0x55, "CL",    "RX", 4 },    /* Compare Logical */
-    
-    /* Instruções de Branch */
-    { 0x47, "BC",    "RX", 4 },    /* Branch on Condition */
-    { 0x45, "BAL",   "RX", 4 },    /* Branch and Link */
-    { 0x05, "BALR",  "RR", 2 },    /* Branch and Link Register */
-    { 0x07, "BCR",   "RR", 2 },    /* Branch on Condition Register */
-    
-    /* Instruções de Shift */
-    { 0x8A, "SRA",   "RS", 4 },    /* Shift Right Arithmetic */
-    { 0x8B, "SLA",   "RS", 4 },    /* Shift Left Arithmetic */
-    { 0x88, "SRL",   "RS", 4 },    /* Shift Right Logical */
-    { 0x89, "SLL",   "RS", 4 },    /* Shift Left Logical */
-    
-    /* Instruções de Ponto Flutuante */
-    { 0x78, "LE",    "RX", 4 },    /* Load (Short) */
-    { 0x68, "LD",    "RX", 4 },    /* Load (Long) */
-    { 0x70, "STE",   "RX", 4 },    /* Store (Short) */
-    { 0x60, "STD",   "RX", 4 },    /* Store (Long) */
-    { 0x3A, "AER",   "RR", 2 },    /* Add (Short) Register */
-    { 0x2A, "ADR",   "RR", 2 },    /* Add (Long) Register */
-    { 0x7A, "AE",    "RX", 4 },    /* Add (Short) */
-    { 0x6A, "AD",    "RX", 4 },    /* Add (Long) */
-    { 0x3B, "SER",   "RR", 2 },    /* Subtract (Short) Register */
-    { 0x2B, "SDR",   "RR", 2 },    /* Subtract (Long) Register */
-    { 0x7B, "SE",    "RX", 4 },    /* Subtract (Short) */
-    { 0x6B, "SD",    "RX", 4 },    /* Subtract (Long) */
-    { 0x3C, "MER",   "RR", 2 },    /* Multiply (Short) Register */
-    { 0x2C, "MDR",   "RR", 2 },    /* Multiply (Long) Register */
-    { 0x7C, "ME",    "RX", 4 },    /* Multiply (Short) */
-    { 0x6C, "MD",    "RX", 4 },    /* Multiply (Long) */
-    { 0x3D, "DER",   "RR", 2 },    /* Divide (Short) Register */
-    { 0x2D, "DDR",   "RR", 2 },    /* Divide (Long) Register */
-    { 0x7D, "DE",    "RX", 4 },    /* Divide (Short) */
-    { 0x6D, "DD",    "RX", 4 },    /* Divide (Long) */
-    { 0x39, "CER",   "RR", 2 },    /* Compare (Short) Register */
-    { 0x29, "CDR",   "RR", 2 },    /* Compare (Long) Register */
-    { 0x79, "CE",    "RX", 4 },    /* Compare (Short) */
-    { 0x69, "CD",    "RX", 4 },    /* Compare (Long) */
-    { 0x23, "LCDR",  "RR", 2 },    /* Load Complement (Long) */
-    { 0x33, "LCER",  "RR", 2 },    /* Load Complement (Short) */
-    { 0x28, "LDR",   "RR", 2 },    /* Load (Long) Register */
-    { 0x38, "LER",   "RR", 2 },    /* Load (Short) Register */
-    
-    /* Instruções de Conversão (z/Architecture) */
-    /* CDFBR: Convert from Fixed 32-bit to Long BFP */
-    /* CFDBR: Convert to Fixed 32-bit from Long BFP */
-    /* Estas são instruções RRE (opcode B3xx) */
-    
-    /* Fim da tabela */
-    { 0, NULL, NULL, 0 }
-};
-
-/*============================================================================
- * Máscaras de Condição para Branch
- *============================================================================*/
-
-#define MASK_NEVER    0   /* Never branch */
-#define MASK_OVERFLOW 1   /* Overflow */
-#define MASK_HIGH     2   /* High (Greater than) */
-#define MASK_LOW      4   /* Low (Less than) */
-#define MASK_EQUAL    8   /* Equal */
-#define MASK_NOTHIGH  (MASK_LOW | MASK_EQUAL)      /* Not High (<=) */
-#define MASK_NOTLOW   (MASK_HIGH | MASK_EQUAL)     /* Not Low (>=) */
-#define MASK_NOTEQUAL (MASK_HIGH | MASK_LOW)       /* Not Equal */
-#define MASK_ALWAYS   15  /* Always branch */
-
-/*============================================================================
  * Buffer de Saída HLASM
  *============================================================================*/
 
@@ -253,8 +131,6 @@ static FILE *hlasm_output = NULL;
 static int   hlasm_label_counter = 0;
 static char  hlasm_csect_name[9] = "CCPROG";
 static int   hlasm_param_count = 0;      /* Contador de parâmetros para chamada */
-static int   hlasm_local_size = 0;       /* Tamanho das variáveis locais */
-static int   hlasm_need_cvt_routines = 0; /* Flag para emitir rotinas de conversão */
 
 /*============================================================================
  * Funções de Inicialização
@@ -308,28 +184,6 @@ static void emit_rr(const char *mnemonic, int r1, int r2)
     emit("         %-5s %d,%d", mnemonic, r1, r2);
 }
 
-/* Emite instrução RX */
-static void emit_rx(const char *mnemonic, int r1, int disp, int index, int base)
-{
-    if (index == 0) {
-        emit("         %-5s %d,%d(,%d)", mnemonic, r1, disp, base);
-    } else {
-        emit("         %-5s %d,%d(%d,%d)", mnemonic, r1, disp, index, base);
-    }
-}
-
-/* Emite instrução com label */
-static void emit_rx_label(const char *mnemonic, int r1, const char *label)
-{
-    emit("         %-5s %d,%s", mnemonic, r1, label);
-}
-
-/* Gera um label único */
-static int new_label(void)
-{
-    return ++hlasm_label_counter;
-}
-
 /* Formata um label */
 static void format_label(char *buf, int label_num)
 {
@@ -358,7 +212,6 @@ void hlasm_function_prolog(const char *func_name)
     emit("*        R1 contains parameter list pointer");
     emit("*        Parameters accessed via: L Rx,0(,1) for 1st, L Rx,4(,1) for 2nd, etc.");
     hlasm_param_count = 0;
-    hlasm_local_size = 0;
 }
 
 void hlasm_function_epilog(void)
@@ -381,21 +234,6 @@ void hlasm_function_epilog(void)
  * 5. Carregar endereço da função em R15
  * 6. BALR 14,15 para chamar
  *============================================================================*/
-
-static void emit_call_setup(int num_params)
-{
-    if (num_params > 0) {
-        emit("*        Setup parameter list for %d parameters", num_params);
-        emit("         LA    1,PLIST         R1 -> parameter list");
-    }
-}
-
-static void emit_call_cleanup(int bytes_pushed)
-{
-    if (bytes_pushed > 0) {
-        emit("*        Cleanup %d bytes from stack", bytes_pushed);
-    }
-}
 
 /*============================================================================
  * Tradução de Código Intermediário para HLASM
@@ -948,19 +786,19 @@ void hlasm_translate(void)
             /* Instruções de Ponto Flutuante */
             case fld_qax:
                 /* Load double from [eax] to FPU */
-                emit("         LD    0,0(,2)          Load double to F0");
+                emit("         LD    0,0(,2)          Load double BFP to F0");
                 break;
                 
             case fld_qcx:
-                emit("         LD    0,0(,3)          Load double to F0");
+                emit("         LD    0,0(,3)          Load double BFP to F0");
                 break;
                 
             case fld_qbp:
-                emit("         LD    0,%d(,11)        Load double from stack", num + STACK_FRAME_BASE);
+                emit("         LD    0,%d(,11)        Load double BFP from stack", num + STACK_FRAME_BASE);
                 break;
                 
             case fld_qp:
-                emit("         LD    0,=D'%d'         Load double constant", num);
+                emit("         LD    0,=DB'%d'        Load double BFP constant", num);
                 break;
                 
             case fst_qax:
@@ -980,59 +818,59 @@ void hlasm_translate(void)
                 break;
                 
             case fadd_qbp:
-                emit("         AD    0,%d(,11)        Add double from stack", num + STACK_FRAME_BASE);
+                emit("         ADB   0,%d(,11)        Add double BFP from stack", num + STACK_FRAME_BASE);
                 break;
                 
             case fsub_qbp:
-                emit("         SD    0,%d(,11)        Sub double from stack", num + STACK_FRAME_BASE);
+                emit("         SDB   0,%d(,11)        Sub double BFP from stack", num + STACK_FRAME_BASE);
                 break;
                 
             case fmul_qbp:
-                emit("         MD    0,%d(,11)        Mul double from stack", num + STACK_FRAME_BASE);
+                emit("         MDB   0,%d(,11)        Mul double BFP from stack", num + STACK_FRAME_BASE);
                 break;
                 
             case fdiv_qbp:
-                emit("         DD    0,%d(,11)        Div double from stack", num + STACK_FRAME_BASE);
+                emit("         DDB   0,%d(,11)        Div double BFP from stack", num + STACK_FRAME_BASE);
                 break;
                 
             case fadd_qp:
-                emit("         AD    0,=D'%d'         Add double constant", num);
+                emit("         ADB   0,=DB'%d'        Add double BFP constant", num);
                 break;
                 
             case fsub_qp:
-                emit("         SD    0,=D'%d'         Sub double constant", num);
+                emit("         SDB   0,=DB'%d'        Sub double BFP constant", num);
                 break;
                 
             case fmul_qp:
-                emit("         MD    0,=D'%d'         Mul double constant", num);
+                emit("         MDB   0,=DB'%d'        Mul double BFP constant", num);
                 break;
                 
             case fdiv_qp:
-                emit("         DD    0,=D'%d'         Div double constant", num);
+                emit("         DDB   0,=DB'%d'        Div double BFP constant", num);
                 break;
                 
             case faddp_st1_st:
-                emit("         ADR   2,0              Add F0 to F2");
+                emit("         ADBR  2,0              Add F0 to F2 (BFP)");
                 emit("         LDR   0,2              Move result to F0");
                 break;
                 
             case fsubrp_st1_st:
-                emit("         SDR   2,0              Sub F0 from F2");
+                emit("         SDBR  2,0              Sub F0 from F2 (BFP)");
                 emit("         LDR   0,2              Move result to F0");
                 break;
                 
             case fmulp_st1_st:
-                emit("         MDR   2,0              Mul F2 by F0");
+                emit("         MDBR  2,0              Mul F2 by F0 (BFP)");
                 emit("         LDR   0,2              Move result to F0");
                 break;
                 
             case fdivrp_st1_st:
-                emit("         DDR   2,0              Div F2 by F0");
+                emit("         DDBR  2,0              Div F2 by F0 (BFP)");
                 emit("         LDR   0,2              Move result to F0");
                 break;
                 
             case fchs:
-                emit("         LCDR  0,0              Negate F0");
+                emit("         LCDBR 0,0              Negate F0 (BFP)");
                 break;
                 
             case fxch_st1:
@@ -1046,14 +884,12 @@ void hlasm_translate(void)
                 /* z/Architecture: CDFBR converts 32-bit fixed to long BFP */
                 emit("         L     0,0(,2)          Load integer from [eax]");
                 emit("         CDFBR 0,0              Convert fixed to long BFP");
-                hlasm_need_cvt_routines = 1;
                 break;
                 
             case fild_dsp:
                 /* Convert integer from stack to float (double) */
                 emit("         L     0,%d(,13)        Load integer from stack", num);
                 emit("         CDFBR 0,0              Convert fixed to long BFP");
-                hlasm_need_cvt_routines = 1;
                 break;
                 
             case fistp_dsp:
@@ -1062,15 +898,14 @@ void hlasm_translate(void)
                 /* Mode 5 = round toward zero (truncate) */
                 emit("         CFDBR 0,5,0            Convert long BFP to fixed (truncate)");
                 emit("         ST    0,%d(,13)        Store integer to stack", num);
-                hlasm_need_cvt_routines = 1;
                 break;
                 
             case fucompp:
-                emit("         CDR   0,2              Compare F0 with F2");
+                emit("         CDBR  0,2              Compare F0 with F2 (BFP)");
                 break;
                 
             case fstsw:
-                emit("* FPU status word - condition code already set by CDR");
+                emit("* FPU status word - condition code already set by CDBR");
                 break;
                 
             case fldcw:
@@ -1098,7 +933,7 @@ void hlasm_translate(void)
         if (pInst->inst == setint) {
             emit("         DC    F'%d'", pInst->num);
         } else if (pInst->inst == setreal) {
-            emit("         DC    D'%f'", pInst->dval);
+            emit("         DC    DB'%f'", pInst->dval);
         } else if (pInst->inst == setstr) {
             /* Emite string em EBCDIC */
             char ebcdic_buf[256];

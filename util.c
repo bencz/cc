@@ -24,7 +24,10 @@ void error(const char *loc, const char *format, ...)
 	{
 		fprintf(stderr, "%s:%d: ", mcc.srcFile[mcc.nPreFile], mcc.lines[mcc.nPreFile]);
 	}
-	vfprintf(stderr, format, (char*)&format + sizeof(char*));
+	va_list args;
+	va_start(args, format);
+	vfprintf(stderr, format, args);
+	va_end(args);
 	exit(1);
 }
 
