@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <time.h>
 
 /* Abstrações cross-platform */
 #include "cc_platform.h"
@@ -272,6 +273,7 @@ void  freeHash(HASH *pHash);
 int   hash(char *key, int size);
 int   put(char *key, void *val, HASH *pHash);
 void *get(char *key, HASH *pHash);
+int   del(char *key, HASH *pHash);
 void  printHash(HASH *pHash);
 
 /*============================================================================

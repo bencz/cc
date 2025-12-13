@@ -206,6 +206,27 @@ void *get(char *key, HASH *pHash)
 	return NULL;
 }
 
+int del(char *key, HASH *pHash)
+{
+	int n, h = hash(key, pHash->size);
+	for (n = 0; n < pHash->size; n++)
+	{
+		int ix = (h + n) % pHash->size;
+		if (pHash->tbl[ix].key == NULL) break;
+		if (strcmp(pHash->tbl[ix].key, key) == 0)
+		{
+			free(pHash->tbl[ix].key);
+			pHash->tbl[ix].key = NULL;
+			if (pHash->type == 's' && pHash->tbl[ix].val != NULL)
+				free(pHash->tbl[ix].val);
+			pHash->tbl[ix].val = NULL;
+			pHash->entries--;
+			return 1;
+		}
+	}
+	return 0;
+}
+
 void printHash(HASH *pHash)
 {
 	char *fmt = pHash->type == 's' ? "%4d %-8s %s\n" : "%4d %-8s %08X\n";

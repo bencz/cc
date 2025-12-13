@@ -106,7 +106,6 @@ void lex(void)
 				int len = strlen(tk1);
 				char *tk = xrealloc(tk1, len + (p - pBgn));
 				strcpy(tk + len - 1, token + 1);
-				free(tk1);
 				cd.token[nToken - 1].token = tk;
 			}
 			else
