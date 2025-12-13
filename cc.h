@@ -80,10 +80,12 @@ enum { AD_CODE = 1, AD_DATA, AD_ZERO, AD_STACK, AD_IMPORT, AD_CONST };
 typedef struct _CMDPARAM
 {
 	int  nSrc;
-	char *srcfile[8];
+	char *srcfile[32];
 	char outfile[MAX_PATH];
 	char impfiles[522];
 	char MCCDIR[MAX_PATH];
+	int  nDefines;
+	char *defines[64];
 } CMDPARAM;
 
 typedef struct _HDATA
@@ -440,9 +442,7 @@ void writeExe(BYTE *bufImport, BYTE *bufExport, BYTE *CodeBuffer,
  * Funções - backend_hlasm.c (Backend HLASM para Mainframe)
  *============================================================================*/
 
-#ifdef USE_HLASM_BACKEND
 void hlasm_link(const char *output_file);
-#endif
 
 /*============================================================================
  * Constantes de Registradores (usadas na otimização de código)

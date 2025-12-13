@@ -29,6 +29,7 @@ static void printUsage(void)
 {
 	printf("%s", "Usage: cc [options] file...\n"
 		"Options:\n"
+		"  -D<macro>[=value]  Define a preprocessor macro\n"
 		"  -shared    Generate a DLL file (Windows only)\n"
 		"  -o <file>  Set output file name\n"
 		"  -l<name>   DLL <name>.dll - link with a dll (Windows only)\n"
@@ -86,6 +87,19 @@ int main(int argc, char *argv[])
 			sprintf(cmd.impfiles + strlen(cmd.impfiles), "%s.dll;", argv[n] + 2);
 #endif
 		}
+		else if (strncmp(argv[n], "-D", 2) == 0)
+		{
+			/* -D<macro>[=valor] */
+			char *def = argv[n] + 2;
+			if (*def == '\0')
+			{
+				/* -D macro (espaço separado) */
+				if (n + 1 < argc) def = argv[++n];
+				else error("main", "-D requires an argument");
+			}
+			/* Armazena para processar depois de initPrepro */
+			cmd.defines[cmd.nDefines++] = def;
+		}
 		else if (argv[n][0] != '-') cmd.srcfile[cmd.nSrc++] = argv[n];
 		else error("main", "invalid option -- '%s'", argv[n]);
 	}
@@ -98,6 +112,24 @@ int main(int argc, char *argv[])
 	char path[MAX_PATH], *p, *q;
 	initHash('s', 1000, &mcc.hash);
 	initPrepro();
+	
+	/* Processa defines da linha de comando */
+	for (n = 0; n < cmd.nDefines; n++)
+	{
+		char *def = cmd.defines[n];
+		char *eq = strchr(def, '=');
+		if (eq != NULL)
+		{
+			*eq = '\0';
+			put(def, eq + 1, &mcc.hash);
+			*eq = '=';
+		}
+		else
+		{
+			put(def, "1", &mcc.hash);
+		}
+	}
+	
 	for (n = 0; n < cmd.nSrc; n++)
 	{
 		PLATFORM_FINDDATA fdata;
@@ -144,11 +176,7 @@ int main(int argc, char *argv[])
 	/* Seleciona o backend apropriado */
 	if (g_backend == BACKEND_HLASM)
 	{
-#ifdef USE_HLASM_BACKEND
 		hlasm_link(cmd.outfile);
-#else
-		error("main", "HLASM backend not compiled. Recompile with -DUSE_HLASM_BACKEND");
-#endif
 	}
 	else
 	{

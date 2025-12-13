@@ -2,14 +2,14 @@
 #
 # Uso:
 #   make              - Compila o compilador (detecta plataforma automaticamente)
-#   make hlasm        - Compila com suporte ao backend HLASM
+#   make bootstrap    - Auto-compilação usando o próprio compilador
 #   make clean        - Remove arquivos objeto e executável
-#   make test         - Compila todos os testes
+#   make test-x86     - Compila todos os testes para x86/PE (Windows only)
 #   make test-hlasm   - Compila todos os testes para HLASM
 #
-# Plataformas suportadas:
-#   - Windows (gera executáveis PE)
-#   - Linux/macOS (apenas backend HLASM)
+# Backends disponíveis (escolha em runtime):
+#   - x86/PE: gera executáveis Windows (apenas em Windows)
+#   - HLASM: gera código assembler para mainframe z/OS (cross-platform, use -hlasm)
 
 # Detecta o sistema operacional
 ifeq ($(OS),Windows_NT)
@@ -38,7 +38,8 @@ endif
 # Diretórios
 BUILD_DIR = build
 TEST_DIR = tests
-TEST_OUT_DIR = $(BUILD_DIR)/tests
+TEST_OUT_X86 = $(BUILD_DIR)/tests/x86
+TEST_OUT_HLASM = $(BUILD_DIR)/tests/hlasm
 
 CC = gcc
 CFLAGS = -Wall -O2
@@ -60,15 +61,11 @@ TEST_NAMES = $(notdir $(basename $(TEST_SRCS)))
 
 all: $(BUILD_DIR) $(TARGET)
 	@echo "Build complete for $(PLATFORM)"
-	@echo "Use -hlasm flag for HLASM output on non-Windows platforms"
+	@echo "Use -hlasm flag for HLASM output (cross-platform)"
+	@echo "Without -hlasm, generates x86/PE output (Windows only)"
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS)
-
-# Build com suporte HLASM habilitado
-hlasm: CFLAGS += -DUSE_HLASM_BACKEND
-hlasm: $(BUILD_DIR) $(TARGET)
-	@echo "Build complete with HLASM backend support"
 
 # Criar diretório build
 $(BUILD_DIR):
@@ -82,41 +79,71 @@ $(BUILD_DIR)/%.o: %.c cc.h cc_platform.h | $(BUILD_DIR)
 # Testes
 # =============================================================================
 
-# Criar diretório de saída de testes
-$(TEST_OUT_DIR):
-	@mkdir -p $(TEST_OUT_DIR)
+# Criar diretórios de saída de testes
+$(TEST_OUT_X86):
+	@mkdir -p $(TEST_OUT_X86)
 
-# Compilar todos os testes (Windows - gera .exe)
-test: $(TARGET) $(TEST_OUT_DIR)
-	@echo "=== Compilando testes ==="
+$(TEST_OUT_HLASM):
+	@mkdir -p $(TEST_OUT_HLASM)
+
+# Compilar todos os testes para x86/PE (Windows only)
+test-x86: $(TARGET) $(TEST_OUT_X86)
+	@echo "=== Compilando testes para x86/PE ==="
 ifeq ($(PLATFORM),windows)
 	@for %%f in ($(TEST_DIR)\*.c) do ( \
 		echo Compilando %%~nf.c ... && \
-		./$(TARGET) %%f -o $(TEST_OUT_DIR)/%%~nf.exe \
+		./$(TARGET) %%f -o $(TEST_OUT_X86)/%%~nf.exe \
 	)
+	@echo "=== Testes x86 gerados em $(TEST_OUT_X86)/ ==="
 else
-	@echo "Use 'make test-hlasm' em plataformas não-Windows"
+	@echo "Erro: Backend x86/PE só disponível no Windows"
+	@echo "Use 'make test-hlasm' para gerar código HLASM"
 endif
-	@echo "=== Testes compilados em $(TEST_OUT_DIR)/ ==="
 
 # Compilar todos os testes para HLASM
-test-hlasm: hlasm $(TEST_OUT_DIR)
+test-hlasm: $(TARGET) $(TEST_OUT_HLASM)
 	@echo "=== Compilando testes para HLASM ==="
 	@for src in $(TEST_SRCS); do \
 		name=$$(basename $$src .c); \
 		echo "Compilando $$name.c ..."; \
-		./$(TARGET) $$src -hlasm -o $(TEST_OUT_DIR)/$$name.asm; \
+		./$(TARGET) $$src -hlasm -o $(TEST_OUT_HLASM)/$$name.asm; \
 	done
-	@echo "=== Testes HLASM gerados em $(TEST_OUT_DIR)/ ==="
+	@echo "=== Testes HLASM gerados em $(TEST_OUT_HLASM)/ ==="
 
 # Compilar um teste específico
 test-%: $(TARGET)
 	@echo "Compilando teste: $*"
 ifeq ($(PLATFORM),windows)
-	./$(TARGET) $(TEST_DIR)/$*.c -o $(BUILD_DIR)/$*.exe
+	@mkdir -p $(TEST_OUT_X86)
+	./$(TARGET) $(TEST_DIR)/$*.c -asm -o $(TEST_OUT_X86)/$*.asm
 else
-	./$(TARGET) $(TEST_DIR)/$*.c -hlasm -o $(BUILD_DIR)/$*.asm
+	@mkdir -p $(TEST_OUT_HLASM)
+	./$(TARGET) $(TEST_DIR)/$*.c -hlasm -o $(TEST_OUT_HLASM)/$*.asm
 endif
+
+# =============================================================================
+# Auto-compilação (bootstrap)
+# =============================================================================
+
+# Macros de plataforma para auto-compilação
+ifeq ($(PLATFORM),windows)
+    PLATFORM_DEFINES = -D_WIN32
+    ifeq ($(PROCESSOR_ARCHITECTURE),AMD64)
+        PLATFORM_DEFINES += -D_WIN64
+    endif
+else ifeq ($(PLATFORM),macos)
+    PLATFORM_DEFINES = -D__APPLE__ -D__MACH__ -DPLATFORM_UNIX
+else
+    PLATFORM_DEFINES = -D__linux__ -DPLATFORM_UNIX
+endif
+
+# Auto-compilação usando o próprio compilador
+bootstrap: $(TARGET)
+	@echo "=== Auto-compilação (bootstrap) ==="
+	@echo "Plataforma detectada: $(PLATFORM)"
+	@echo "Defines: $(PLATFORM_DEFINES)"
+	./$(TARGET) -hlasm $(PLATFORM_DEFINES) $(SRCS) -o $(BUILD_DIR)/cc_bootstrap.asm
+	@echo "=== Bootstrap gerado em $(BUILD_DIR)/cc_bootstrap.asm ==="
 
 # =============================================================================
 # Limpeza
@@ -149,4 +176,4 @@ info:
 	@echo "Testes disponíveis:"
 	@for src in $(TEST_SRCS); do echo "  - $$(basename $$src)"; done
 
-.PHONY: all clean clean-tests test test-hlasm hlasm info
+.PHONY: all clean clean-tests test-x86 test-hlasm info bootstrap

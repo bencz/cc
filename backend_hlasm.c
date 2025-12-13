@@ -4,13 +4,10 @@
  * Este módulo gera código assembler HLASM (High Level Assembler) 
  * para mainframes IBM z/OS a partir do código intermediário.
  * 
- * Uso: compile com -DUSE_HLASM_BACKEND e use a opção -hlasm
+ * Uso: use a opção -hlasm na linha de comando
  */
 
 #include "cc.h"
-
-#ifdef USE_HLASM_BACKEND
-
 #include <stdarg.h>
 
 /*============================================================================
@@ -991,8 +988,6 @@ void hlasm_link(const char *output_file)
     
     printf("HLASM output written to: %s\n", output_file);
 }
-
-#endif /* USE_HLASM_BACKEND */
 
 /*============================================================================
  * Notas de Implementação - Status
