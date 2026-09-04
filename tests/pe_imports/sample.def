@@ -1,0 +1,4 @@
+LIBRARY sample.dll
+
+EXPORTS
+    imported_add

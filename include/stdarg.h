@@ -1,8 +1,12 @@
-#define va_list char*
-/***
+#ifndef CC_STDARG_H
+#define CC_STDARG_H
+
 typedef char *va_list;
-#define va_start(ap,last) ap = ((char *)&(last)) + ((sizeof(last)+3)&~3)
-#define va_arg(ap,type) (ap += (sizeof(type)+3)&~3, *(type *)(ap - ((sizeof(type)+3)&~3)))
-#define va_copy(dest, src) (dest) = (src)
-#define va_end(ap)
-**/
+
+#define __CC_VA_SIZE(type) ((sizeof(type) + 3U) & ~3U)
+#define va_start(ap, last) ((ap) = (char *)&(last) + __CC_VA_SIZE(last))
+#define va_arg(ap, type) (*(type *)((ap) += __CC_VA_SIZE(type), (ap) - __CC_VA_SIZE(type)))
+#define va_copy(destination, source) ((destination) = (source))
+#define va_end(ap) ((void)(ap))
+
+#endif

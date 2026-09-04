@@ -1,107 +1,135 @@
-/*
- * prepro.c - Preprocessador do compilador
- * 
- * Responsável por processar diretivas #include, #define, #pragma
- * e preparar o código fonte para análise léxica.
- */
+/* Preprocessor directives, macro expansion, and logical source lines. */
 
 #include "cc.h"
 
-/*============================================================================
- * Estado de Compilação Condicional
- *============================================================================*/
+/* Conditional-compilation state */
 
 #define MAX_IF_DEPTH 64
 
-static struct {
-	int depth;                    /* profundidade atual do aninhamento */
-	int skip[MAX_IF_DEPTH];       /* 1 = pular código neste nível */
-	int done[MAX_IF_DEPTH];       /* 1 = já encontrou branch verdadeiro */
-} ifstack = {0};
+typedef struct _ConditionalStack
+{
+	int depth;
+	int skip[MAX_IF_DEPTH];
+	int branchTaken[MAX_IF_DEPTH];
+	int elseSeen[MAX_IF_DEPTH];
+} ConditionalStack;
 
-/* Macros predefinidas __DATE__ e __TIME__ */
-static char macro_date[16];  /* "Mmm dd yyyy" */
-static char macro_time[12];  /* "hh:mm:ss" */
+static ConditionalStack conditionalStack = {0};
 
-/*============================================================================
- * Macros com Parâmetros
- *============================================================================*/
+/* Predefined __DATE__ and __TIME__ values. */
+static char macro_date[16]; /* "Mmm dd yyyy" */
+static char macro_time[12]; /* "hh:mm:ss" */
+
+/* Function-like macros */
 
 #define MAX_MACRO_PARAMS 32
-#define MAX_MACRO_BODY   4096
+#define MAX_MACRO_BODY 4096
 
-typedef struct {
+typedef struct _MacroDef
+{
 	char name[64];
 	char params[MAX_MACRO_PARAMS][64];
-	int  nParams;
-	int  isVariadic;              /* 1 se último param é ... */
+	int parameterCount;
+	int variadic;
 	char body[MAX_MACRO_BODY];
 } MacroDef;
 
 static MacroDef macros[256];
-static int nMacros = 0;
+static int macroCount = 0;
 
 static MacroDef *findMacro(const char *name)
 {
-	for (int i = 0; i < nMacros; i++)
+	for (int i = 0; i < macroCount; i++)
+	{
 		if (strcmp(macros[i].name, name) == 0)
+		{
 			return &macros[i];
+		}
+	}
 	return NULL;
 }
 
 static void deleteMacro(const char *name)
 {
-	for (int i = 0; i < nMacros; i++)
+	for (int i = 0; i < macroCount; i++)
 	{
 		if (strcmp(macros[i].name, name) == 0)
 		{
-			memmove(&macros[i], &macros[i+1], (nMacros - i - 1) * sizeof(MacroDef));
-			nMacros--;
+			memmove(&macros[i], &macros[i + 1], (macroCount - i - 1) * sizeof(MacroDef));
+			macroCount--;
 			return;
 		}
 	}
 }
 
-/* Retorna 1 se devemos pular o código atual */
 static int shouldSkip(void)
 {
-	for (int i = 0; i <= ifstack.depth; i++)
-		if (ifstack.skip[i]) return 1;
+	for (int i = 0; i <= conditionalStack.depth; i++)
+	{
+		if (conditionalStack.skip[i])
+		{
+			return 1;
+		}
+	}
 	return 0;
 }
 
-/*============================================================================
- * Expansão de Macros com Parâmetros
- *============================================================================*/
+static int parentShouldSkip(void)
+{
+	for (int i = 0; i < conditionalStack.depth; ++i)
+	{
+		if (conditionalStack.skip[i])
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
 
-/* Pula string/char literal e retorna ponteiro para após */
+/* Function-like macro expansion */
+
 static char *skipStringLiteral(char *p)
 {
 	char quote = *p++;
 	while (*p && *p != quote)
 	{
-		if (*p == '\\' && p[1]) p++;
+		if (*p == '\\' && p[1])
+		{
+			p++;
+		}
 		p++;
 	}
-	if (*p) p++;
+	if (*p)
+	{
+		p++;
+	}
 	return p;
 }
 
-/* Extrai argumentos de uma chamada de macro, retorna número de args */
 static int extractMacroArgs(char *start, char *args[], int maxArgs, char **endPtr)
 {
 	int nArgs = 0;
 	int depth = 1;
 	char *p = start;
-	
-	if (*p != '(') return 0;
+
+	if (*p != '(')
+	{
+		return 0;
+	}
 	p++;
-	
-	while (*p && *p <= ' ') p++;
-	if (*p == ')') { *endPtr = p + 1; return 0; }
-	
+
+	while (*p && *p <= ' ')
+	{
+		p++;
+	}
+	if (*p == ')')
+	{
+		*endPtr = p + 1;
+		return 0;
+	}
+
 	char *argStart = p;
-	
+
 	while (*p && depth > 0 && nArgs < maxArgs)
 	{
 		if (*p == '"' || *p == '\'')
@@ -118,19 +146,27 @@ static int extractMacroArgs(char *start, char *args[], int maxArgs, char **endPt
 			depth--;
 			if (depth == 0)
 			{
-				/* Fim dos argumentos */
+				/* Final argument */
 				int len = p - argStart;
 				args[nArgs] = xalloc(len + 1);
 				strncpy(args[nArgs], argStart, len);
 				args[nArgs][len] = '\0';
 				/* Trim whitespace */
-				while (len > 0 && args[nArgs][len-1] <= ' ')
+				while (len > 0 && args[nArgs][len - 1] <= ' ')
+				{
 					args[nArgs][--len] = '\0';
+				}
 				char *s = args[nArgs];
-				while (*s && *s <= ' ') s++;
-				if (s != args[nArgs]) memmove(args[nArgs], s, strlen(s) + 1);
+				while (*s && *s <= ' ')
+				{
+					s++;
+				}
+				if (s != args[nArgs])
+				{
+					memmove(args[nArgs], s, strlen(s) + 1);
+				}
 				nArgs++;
-				p++; /* Avança além do ) final */
+				p++; /* Consume the closing parenthesis. */
 				break;
 			}
 			else
@@ -140,20 +176,31 @@ static int extractMacroArgs(char *start, char *args[], int maxArgs, char **endPt
 		}
 		else if (*p == ',' && depth == 1)
 		{
-			/* Separador de argumento */
+			/* Argument separator */
 			int len = p - argStart;
 			args[nArgs] = xalloc(len + 1);
 			strncpy(args[nArgs], argStart, len);
 			args[nArgs][len] = '\0';
 			/* Trim whitespace */
-			while (len > 0 && args[nArgs][len-1] <= ' ')
+			while (len > 0 && args[nArgs][len - 1] <= ' ')
+			{
 				args[nArgs][--len] = '\0';
+			}
 			char *s = args[nArgs];
-			while (*s && *s <= ' ') s++;
-			if (s != args[nArgs]) memmove(args[nArgs], s, strlen(s) + 1);
+			while (*s && *s <= ' ')
+			{
+				s++;
+			}
+			if (s != args[nArgs])
+			{
+				memmove(args[nArgs], s, strlen(s) + 1);
+			}
 			nArgs++;
 			p++;
-			while (*p && *p <= ' ') p++;
+			while (*p && *p <= ' ')
+			{
+				p++;
+			}
 			argStart = p;
 		}
 		else
@@ -161,50 +208,107 @@ static int extractMacroArgs(char *start, char *args[], int maxArgs, char **endPt
 			p++;
 		}
 	}
-	
+	if (depth > 0)
+	{
+		error("prepro",
+		      nArgs >= maxArgs ? "too many macro arguments" : "unterminated macro invocation");
+	}
+
 	*endPtr = p;
 	return nArgs;
 }
 
-/* Stringify: converte argumento em string literal */
+/* Convert one macro argument to a string literal. */
 static void stringify(const char *arg, char *out, int maxLen)
 {
 	int oi = 0;
+	if (maxLen < 3)
+	{
+		error("prepro", "stringification buffer is too small");
+	}
 	out[oi++] = '"';
-	for (const char *p = arg; *p && oi < maxLen - 2; p++)
+	for (const char *p = arg; *p; p++)
 	{
 		if (*p == '"' || *p == '\\')
+		{
+			if (oi + 2 >= maxLen)
+			{
+				error("prepro", "stringified macro argument is too large");
+			}
 			out[oi++] = '\\';
+		}
+		else if (oi + 1 >= maxLen)
+		{
+			error("prepro", "stringified macro argument is too large");
+		}
 		out[oi++] = *p;
+	}
+	if (oi + 1 >= maxLen)
+	{
+		error("prepro", "stringified macro argument is too large");
 	}
 	out[oi++] = '"';
 	out[oi] = '\0';
 }
 
-/* Expande uma macro com parâmetros */
+/* Expand a function-like macro. */
 static int expandFunctionMacro(MacroDef *m, char *args[], int nArgs, char *out, int maxLen)
 {
 	char *body = m->body;
 	int oi = 0;
-	
+
 	while (*body && oi < maxLen - 1)
 	{
-		/* Operador # (stringify) */
+		if (*body == '"' || *body == '\'')
+		{
+			char quote = *body++;
+			out[oi++] = quote;
+			while (*body != '\0')
+			{
+				if (oi >= maxLen - 1)
+				{
+					error("prepro", "macro expansion is too large");
+				}
+				out[oi++] = *body;
+				if (*body == '\\' && body[1] != '\0')
+				{
+					++body;
+					if (oi >= maxLen - 1)
+					{
+						error("prepro", "macro expansion is too large");
+					}
+					out[oi++] = *body;
+				}
+				else if (*body == quote)
+				{
+					++body;
+					break;
+				}
+				++body;
+			}
+			continue;
+		}
+		/* Stringification */
 		if (*body == '#' && body[1] != '#')
 		{
 			body++;
-			while (*body && *body <= ' ') body++;
-			
-			/* Extrai nome do parâmetro */
+			while (*body && *body <= ' ')
+			{
+				body++;
+			}
+
+			/* Parameter name */
 			char pname[64];
 			int pi = 0;
-			while (*body && (isAlNum(*body) || *body == '_') && pi < 63)
+			while (*body && (isIdentifierContinue(*body) || *body == '_') && pi < 63)
+			{
 				pname[pi++] = *body++;
+			}
 			pname[pi] = '\0';
-			
-			/* Encontra índice do parâmetro */
+
+			/* Parameter index */
 			int idx = -1;
-			for (int i = 0; i < m->nParams; i++)
+			for (int i = 0; i < m->parameterCount; i++)
 			{
 				if (strcmp(m->params[i], pname) == 0)
 				{
@@ -212,83 +316,107 @@ static int expandFunctionMacro(MacroDef *m, char *args[], int nArgs, char *out, 
 					break;
 				}
 			}
-			
+
 			if (idx >= 0 && idx < nArgs)
 			{
 				char tmp[512];
 				stringify(args[idx], tmp, sizeof(tmp));
 				int len = strlen(tmp);
-				if (oi + len < maxLen)
+				if (oi + len >= maxLen)
 				{
-					strcpy(out + oi, tmp);
-					oi += len;
+					error("prepro", "macro expansion is too large");
 				}
+				strcpy(out + oi, tmp);
+				oi += len;
 			}
-			else if (strcmp(pname, "__VA_ARGS__") == 0 && m->isVariadic)
+			else if (strcmp(pname, "__VA_ARGS__") == 0 && m->variadic)
 			{
-				/* Stringify variadic args */
+				/* Stringify the complete variadic argument list. */
 				char vaargs[2048] = "";
-				for (int i = m->nParams; i < nArgs; i++)
+				for (int i = m->parameterCount; i < nArgs; i++)
 				{
-					if (i > m->nParams) strcat(vaargs, ", ");
-					strcat(vaargs, args[i]);
+					size_t used = strlen(vaargs);
+					size_t argumentLength = strlen(args[i]);
+					size_t separatorLength = i > m->parameterCount ? 2U : 0U;
+					if (used + separatorLength + argumentLength + 1U > sizeof(vaargs))
+					{
+						error("prepro", "variadic macro argument list is too large");
+					}
+					if (separatorLength != 0U)
+					{
+						memcpy(vaargs + used, ", ", 2U), used += 2U;
+					}
+					memcpy(vaargs + used, args[i], argumentLength + 1U);
 				}
 				char tmp[2048];
 				stringify(vaargs, tmp, sizeof(tmp));
 				int len = strlen(tmp);
-				if (oi + len < maxLen)
+				if (oi + len >= maxLen)
 				{
-					strcpy(out + oi, tmp);
-					oi += len;
+					error("prepro", "macro expansion is too large");
 				}
+				strcpy(out + oi, tmp);
+				oi += len;
 			}
 			continue;
 		}
-		
-		/* Operador ## (concatenação) - remove espaços ao redor */
+
+		/* Token pasting */
 		if (body[0] == '#' && body[1] == '#')
 		{
-			/* Remove espaços antes */
-			while (oi > 0 && out[oi-1] <= ' ') oi--;
+			/* Remove leading whitespace. */
+			while (oi > 0 && out[oi - 1] <= ' ')
+			{
+				oi--;
+			}
 			body += 2;
-			/* Pula espaços depois */
-			while (*body && *body <= ' ') body++;
+			/* Skip trailing whitespace. */
+			while (*body && *body <= ' ')
+			{
+				body++;
+			}
 			continue;
 		}
-		
-		/* Identificador - pode ser parâmetro ou __VA_ARGS__ */
-		if (isAlpha(*body) || *body == '_')
+
+		/* Parameter or __VA_ARGS__ substitution. */
+		if (isIdentifierStart(*body) || *body == '_')
 		{
 			char pname[64];
 			int pi = 0;
-			char *pstart = body;
-			while (*body && (isAlNum(*body) || *body == '_') && pi < 63)
-				pname[pi++] = *body++;
-			pname[pi] = '\0';
-			
-			/* Verifica se é __VA_ARGS__ */
-			if (strcmp(pname, "__VA_ARGS__") == 0 && m->isVariadic)
+			while (*body && (isIdentifierContinue(*body) || *body == '_') && pi < 63)
 			{
-				for (int i = m->nParams; i < nArgs; i++)
+				pname[pi++] = *body++;
+			}
+			pname[pi] = '\0';
+
+			/* Variadic substitution */
+			if (strcmp(pname, "__VA_ARGS__") == 0 && m->variadic)
+			{
+				for (int i = m->parameterCount; i < nArgs; i++)
 				{
-					if (i > m->nParams)
+					int len = strlen(args[i]);
+					if (i > m->parameterCount)
 					{
+						if (oi + 2 + len >= maxLen)
+						{
+							error("prepro", "macro expansion is too large");
+						}
 						out[oi++] = ',';
 						out[oi++] = ' ';
 					}
-					int len = strlen(args[i]);
-					if (oi + len < maxLen)
+					if (oi + len >= maxLen)
 					{
-						strcpy(out + oi, args[i]);
-						oi += len;
+						error("prepro", "macro expansion is too large");
 					}
+					strcpy(out + oi, args[i]);
+					oi += len;
 				}
 				continue;
 			}
-			
-			/* Verifica se é parâmetro */
+
+			/* Named parameter substitution */
 			int idx = -1;
-			for (int i = 0; i < m->nParams; i++)
+			for (int i = 0; i < m->parameterCount; i++)
 			{
 				if (strcmp(m->params[i], pname) == 0)
 				{
@@ -296,60 +424,114 @@ static int expandFunctionMacro(MacroDef *m, char *args[], int nArgs, char *out, 
 					break;
 				}
 			}
-			
+
 			if (idx >= 0 && idx < nArgs)
 			{
 				int len = strlen(args[idx]);
-				if (oi + len < maxLen)
+				if (oi + len >= maxLen)
 				{
-					strcpy(out + oi, args[idx]);
-					oi += len;
+					error("prepro", "macro expansion is too large");
 				}
+				strcpy(out + oi, args[idx]);
+				oi += len;
 			}
 			else
 			{
-				/* Não é parâmetro, copia como está */
+				/* Preserve ordinary identifiers. */
 				int len = strlen(pname);
-				if (oi + len < maxLen)
+				if (oi + len >= maxLen)
 				{
-					strcpy(out + oi, pname);
-					oi += len;
+					error("prepro", "macro expansion is too large");
 				}
+				strcpy(out + oi, pname);
+				oi += len;
 			}
 			continue;
 		}
-		
-		/* Caractere normal */
+
+		/* Ordinary character */
 		out[oi++] = *body++;
 	}
-	
+
+	if (*body != '\0')
+	{
+		error("prepro", "macro expansion is too large");
+	}
 	out[oi] = '\0';
 	return oi;
 }
 
-/*============================================================================
- * Funções Auxiliares de Parsing
- *============================================================================*/
+int preproExpandFunctionExpression(const char *name, const char **cursor, char **replacement)
+{
+	MacroDef *macro = findMacro(name);
+	char *arguments[MAX_MACRO_PARAMS];
+	char *invocation = (char *)*cursor;
+	char *end;
+	char *expanded;
+	int argumentCount;
+	int index;
+	if (macro == NULL)
+	{
+		return 0;
+	}
+	while (*invocation == ' ' || *invocation == '\t')
+	{
+		++invocation;
+	}
+	if (*invocation != '(')
+	{
+		return 0;
+	}
+	argumentCount = extractMacroArgs(invocation, arguments, MAX_MACRO_PARAMS, &end);
+	if (argumentCount == 0 && macro->parameterCount == 1)
+	{
+		arguments[argumentCount++] = xstrdup("");
+	}
+	if ((!macro->variadic && argumentCount != macro->parameterCount) ||
+	    (macro->variadic && argumentCount < macro->parameterCount))
+	{
+		error("prepro", "macro '%s' has the wrong number of arguments in #if", name);
+	}
+	expanded = xalloc(MAX_MACRO_BODY);
+	expandFunctionMacro(macro, arguments, argumentCount, expanded, MAX_MACRO_BODY);
+	for (index = 0; index < argumentCount; ++index)
+	{
+		free(arguments[index]);
+	}
+	*cursor = end;
+	*replacement = expanded;
+	return 1;
+}
+
+/* Text parsing */
 
 static int parseline(char *p, char *q)
 {
 	while (*p != '\0' && *p != '\n')
 	{
-		if (p[0] == '/' && p[1] == '/') break;
+		if (p[0] == '/' && p[1] == '/')
+		{
+			break;
+		}
 		if (p[0] == '/' && p[1] == '*')
 		{
 			char *r = strstr(p + 2, "*/");
 			if (r == NULL)
 			{
+				*q++ = ' ';
 				*q = '\0';
 				return 1;
 			}
-			strcpy(p, r + 2);
+			*q++ = ' ';
+			p = r + 2;
 		}
 		else if (*p == '\'' || *p == '"')
 		{
-			char *pEnd = endOfQuote(p);
-			while (p < pEnd) *q++ = *p++;
+			char *pEnd = skipQuotedLiteral(p);
+			while (p < pEnd)
+			{
+				*q++ = *p++;
+			}
 		}
 		else
 		{
@@ -360,368 +542,599 @@ static int parseline(char *p, char *q)
 	return 0;
 }
 
-/*============================================================================
- * Processamento de Diretivas
- *============================================================================*/
+/* Read one C logical source line.  Backslash-newline splicing happens before
+ * comment removal and directive recognition, as required by the translation
+ * phase ordering.  The returned buffer is owned by the caller. */
+static char *readLogicalLine(FILE *input, int *nextLine, int *startLine)
+{
+	size_t capacity = 256U;
+	size_t length = 0U;
+	char *line = xalloc(capacity);
+	int c;
+	int sawAny = 0;
+	*startLine = *nextLine;
+	for (;;)
+	{
+		c = fgetc(input);
+		if (c == EOF)
+		{
+			if (ferror(input))
+			{
+				error("prepro", "source read error");
+			}
+			break;
+		}
+		sawAny = 1;
+		if (c == '\r')
+		{
+			int following = fgetc(input);
+			if (following != '\n' && following != EOF)
+			{
+				ungetc(following, input);
+			}
+			c = '\n';
+		}
+		if (c == '\n')
+		{
+			++*nextLine;
+			if (length > 0U && line[length - 1U] == '\\')
+			{
+				--length;
+				continue;
+			}
+			break;
+		}
+		if (length + 1U >= capacity)
+		{
+			if (capacity > SIZE_MAX / 2U)
+			{
+				error("prepro", "logical source line is too large");
+			}
+			capacity *= 2U;
+			line = xrealloc(line, capacity);
+		}
+		line[length++] = (char)c;
+	}
+	if (!sawAny && length == 0U)
+	{
+		free(line);
+		return NULL;
+	}
+	line[length] = '\0';
+	return line;
+}
 
-static void procInclude(char *src, char *p)
+/* Directive handling */
+
+static void processInclude(char *src, char *p)
 {
 	char *q, *r, *s, path[260];
+	int written;
 
-#ifdef PLATFORM_WINDOWS
-	const char *sep = "\\";
-#else
 	const char *sep = "/";
-#endif
 
 	if ((q = strchr(p, '<')) != NULL && (r = strchr(q, '>')) != NULL)
 	{
-		sprintf(path, "%s%sinclude%s%.*s", cmd.MCCDIR, sep, sep, (int)(r - q - 1), q + 1);
+		written = snprintf(
+		    path, sizeof(path), "%s%sinclude%s%.*s", cmd.MCCDIR, sep, sep, (int)(r - q - 1), q + 1);
 	}
 	else if ((q = strchr(p, '"')) != NULL && (r = strchr(q + 1, '"')) != NULL)
 	{
-		if ((s = strrchr(src, '/')) == NULL) s = strrchr(src, '\\');
-		if (s == NULL) sprintf(path, "%.*s", (int)(r - q - 1), q + 1);
-		else sprintf(path, "%.*s%.*s", (int)(s - src + 1), src, (int)(r - q - 1), q + 1);
+		if ((s = strrchr(src, '/')) == NULL)
+		{
+			s = strrchr(src, '\\');
+		}
+		if (s == NULL)
+		{
+			written = snprintf(path, sizeof(path), "%.*s", (int)(r - q - 1), q + 1);
+		}
+		else
+		{
+			written = snprintf(
+			    path, sizeof(path), "%.*s%.*s", (int)(s - src + 1), src, (int)(r - q - 1), q + 1);
+		}
 	}
 	else
 	{
+		error("prepro", "malformed #include directive");
 		return;
 	}
-	if (get(path, &mcc.hash) == NULL)
+	if (written < 0 || (size_t)written >= sizeof(path))
 	{
-		put(path, p, &mcc.hash);
-		prepro(path);
+		error("prepro", "included file path is too long");
 	}
+	prepro(path);
 }
 
-static void procDefine(char *str, HASH *pHash)
+static void processDefine(char *str, HASH *pHash)
 {
 	char *p = str;
-	while (*p && *p <= ' ') p++;
-	
-	/* Extrai nome da macro */
+	while (*p && *p <= ' ')
+	{
+		p++;
+	}
+
+	/* Macro name */
 	char name[64];
 	int ni = 0;
-	while (*p && (isAlNum(*p) || *p == '_') && ni < 63)
+	while (*p && (isIdentifierContinue(*p) || *p == '_') && ni < 63)
+	{
 		name[ni++] = *p++;
+	}
 	name[ni] = '\0';
-	
-	/* Verifica se é macro com parâmetros: nome seguido imediatamente por ( */
+	if (name[0] == '\0' || !isIdentifierStart((unsigned char)name[0]))
+	{
+		error("prepro", "macro name expected after #define");
+	}
+	if (isIdentifierContinue((unsigned char)*p) || *p == '_')
+	{
+		error("prepro", "macro name exceeds %u characters", (unsigned int)sizeof(name) - 1U);
+	}
+
+	/* A function-like macro requires '(' immediately after its name. */
 	if (*p == '(')
 	{
-		p++; /* pula ( */
-		MacroDef *m = &macros[nMacros];
+		p++; /* Consume '('. */
+		MacroDef *m = findMacro(name);
+		if (m == NULL)
+		{
+			if (macroCount >= (int)(sizeof(macros) / sizeof(macros[0])))
+			{
+				error("prepro", "too many function-like macros");
+			}
+			m = &macros[macroCount++];
+		}
+		memset(m, 0, sizeof(*m));
 		strcpy(m->name, name);
-		m->nParams = 0;
-		m->isVariadic = 0;
-		
-		/* Parse parâmetros */
+		m->parameterCount = 0;
+		m->variadic = 0;
+
+		/* Parameter list */
 		while (*p && *p != ')')
 		{
-			while (*p && *p <= ' ') p++;
-			if (*p == ')') break;
-			
-			/* Verifica ... (variadic) */
-			if (strncmp(p, "...", 3) == 0)
+			while (*p && *p <= ' ')
 			{
-				m->isVariadic = 1;
-				p += 3;
-				while (*p && *p <= ' ') p++;
+				p++;
+			}
+			if (*p == ')')
+			{
 				break;
 			}
-			
-			/* Extrai nome do parâmetro */
-			int pi = 0;
-			while (*p && (isAlNum(*p) || *p == '_') && pi < 63)
-				m->params[m->nParams][pi++] = *p++;
-			m->params[m->nParams][pi] = '\0';
-			
-			/* Verifica se param é seguido por ... */
-			while (*p && *p <= ' ') p++;
+
+			/* Unnamed variadic parameter */
 			if (strncmp(p, "...", 3) == 0)
 			{
-				m->isVariadic = 1;
+				m->variadic = 1;
 				p += 3;
-				while (*p && *p <= ' ') p++;
+				while (*p && *p <= ' ')
+				{
+					p++;
+				}
+				break;
 			}
-			
-			m->nParams++;
-			while (*p && *p <= ' ') p++;
-			if (*p == ',') p++;
+
+			/* Parameter name */
+			int pi = 0;
+			if (m->parameterCount >= MAX_MACRO_PARAMS)
+			{
+				error("prepro", "too many parameters in macro '%s'", name);
+			}
+			while (*p && (isIdentifierContinue(*p) || *p == '_') && pi < 63)
+			{
+				m->params[m->parameterCount][pi++] = *p++;
+			}
+			m->params[m->parameterCount][pi] = '\0';
+			if (pi == 0 || !isIdentifierStart((unsigned char)m->params[m->parameterCount][0]))
+			{
+				error("prepro", "invalid parameter in macro '%s'", name);
+			}
+			if (isIdentifierContinue((unsigned char)*p) || *p == '_')
+			{
+				error("prepro", "parameter name in macro '%s' is too long", name);
+			}
+			for (int parameter = 0; parameter < m->parameterCount; ++parameter)
+			{
+				if (strcmp(m->params[parameter], m->params[m->parameterCount]) == 0)
+				{
+					error("prepro",
+					      "duplicate parameter '%s' in macro '%s'",
+					      m->params[m->parameterCount],
+					      name);
+				}
+			}
+
+			/* Named variadic parameter */
+			while (*p && *p <= ' ')
+			{
+				p++;
+			}
+			if (strncmp(p, "...", 3) == 0)
+			{
+				m->variadic = 1;
+				p += 3;
+				while (*p && *p <= ' ')
+				{
+					p++;
+				}
+			}
+
+			m->parameterCount++;
+			while (*p && *p <= ' ')
+			{
+				p++;
+			}
+			if (*p == ',')
+			{
+				p++;
+			}
+			else if (*p != ')')
+			{
+				error("prepro", "',' or ')' expected in macro '%s'", name);
+			}
 		}
-		if (*p == ')') p++;
-		
-		/* Pula espaços antes do corpo */
-		while (*p && *p <= ' ') p++;
-		
-		/* Copia corpo da macro */
-		strncpy(m->body, p, MAX_MACRO_BODY - 1);
-		m->body[MAX_MACRO_BODY - 1] = '\0';
-		
+		if (*p != ')')
+		{
+			error("prepro", "unterminated parameter list in macro '%s'", name);
+		}
+		p++;
+
+		/* Skip whitespace before the replacement list. */
+		while (*p && *p <= ' ')
+		{
+			p++;
+		}
+
+		/* Copy the replacement list. */
+		if (strlen(p) >= sizeof(m->body))
+		{
+			error("prepro", "replacement list for macro '%s' is too large", name);
+		}
+		strcpy(m->body, p);
+
 		/* Remove trailing whitespace */
 		int len = strlen(m->body);
-		while (len > 0 && m->body[len-1] <= ' ')
+		while (len > 0 && m->body[len - 1] <= ' ')
+		{
 			m->body[--len] = '\0';
-		
-		nMacros++;
-		
-		/* Também registra na hash para que defined() funcione */
-		put(name, "", pHash);
+		}
+
+		/* Keep function-like macros visible to defined(). */
+		hashPut(name, "", pHash);
 	}
 	else
 	{
-		/* Macro simples sem parâmetros */
-		while (*p && *p <= ' ') p++;
+		deleteMacro(name);
+		/* Object-like macro */
+		while (*p && *p <= ' ')
+		{
+			p++;
+		}
 		if (*p == '\0')
+		{
 			p = "";
-		put(name, p, pHash);
+		}
+		hashPut(name, p, pHash);
 	}
 }
 
-static void procUndef(char *str, HASH *pHash)
+static void processUndef(char *str, HASH *pHash)
 {
 	char *p = str;
-	while (*p && *p <= ' ') p++;
+	while (*p && *p <= ' ')
+	{
+		p++;
+	}
 	char name[64];
 	int ni = 0;
-	while (*p && (isAlNum(*p) || *p == '_') && ni < 63)
+	while (*p && (isIdentifierContinue(*p) || *p == '_') && ni < 63)
+	{
 		name[ni++] = *p++;
+	}
 	name[ni] = '\0';
-	
+
 	if (name[0] != '\0')
 	{
-		del(name, pHash);
+		hashRemove(name, pHash);
 		deleteMacro(name);
 	}
 }
 
-static void procIfdef(char *str, HASH *pHash, int negate)
+static void processIfdef(char *str, HASH *pHash, int negate)
 {
-	if (ifstack.depth >= MAX_IF_DEPTH - 1)
+	int parentSkipping;
+	if (conditionalStack.depth >= MAX_IF_DEPTH - 1)
+	{
 		error("prepro", "#if nesting too deep");
-	ifstack.depth++;
+	}
+	parentSkipping = shouldSkip();
+	conditionalStack.depth++;
 	char *p = strtok(str, " \t");
-	int defined = (p != NULL && get(p, pHash) != NULL);
-	if (negate) defined = !defined;
-	ifstack.skip[ifstack.depth] = !defined;
-	ifstack.done[ifstack.depth] = defined;
+	int defined = !parentSkipping && (p != NULL && hashGet(p, pHash) != NULL);
+	if (negate)
+	{
+		defined = !defined;
+	}
+	if (parentSkipping)
+	{
+		defined = 0;
+	}
+	conditionalStack.skip[conditionalStack.depth] = !defined;
+	conditionalStack.branchTaken[conditionalStack.depth] = defined;
+	conditionalStack.elseSeen[conditionalStack.depth] = 0;
 }
 
-static void procElse(void)
+static void processElse(void)
 {
-	if (ifstack.depth <= 0)
+	if (conditionalStack.depth <= 0)
+	{
 		error("prepro", "#else without #if");
-	if (ifstack.done[ifstack.depth])
-		ifstack.skip[ifstack.depth] = 1;
-	else
-	{
-		ifstack.skip[ifstack.depth] = 0;
-		ifstack.done[ifstack.depth] = 1;
 	}
-}
-
-static void procElif(char *str, HASH *pHash)
-{
-	if (ifstack.depth <= 0)
-		error("prepro", "#elif without #if");
-	if (ifstack.done[ifstack.depth])
+	if (conditionalStack.elseSeen[conditionalStack.depth])
 	{
-		ifstack.skip[ifstack.depth] = 1;
+		error("prepro", "duplicate #else");
+	}
+	conditionalStack.elseSeen[conditionalStack.depth] = 1;
+	if (conditionalStack.branchTaken[conditionalStack.depth])
+	{
+		conditionalStack.skip[conditionalStack.depth] = 1;
 	}
 	else
 	{
-		/* Avalia expressão simples: defined(X) ou apenas X */
-		char *p = str;
-		while (*p && *p <= ' ') p++;
-		int result = 0;
-		if (strncmp(p, "defined", 7) == 0)
-		{
-			p += 7;
-			while (*p && (*p <= ' ' || *p == '(')) p++;
-			char *end = p;
-			while (*end && *end != ')' && *end > ' ') end++;
-			char save = *end;
-			*end = '\0';
-			result = (get(p, pHash) != NULL);
-			*end = save;
-		}
-		else
-		{
-			char *name = strtok(p, " \t");
-			if (name != NULL)
-				result = (get(name, pHash) != NULL);
-		}
-		ifstack.skip[ifstack.depth] = !result;
-		ifstack.done[ifstack.depth] = result;
+		conditionalStack.skip[conditionalStack.depth] = 0;
+		conditionalStack.branchTaken[conditionalStack.depth] = 1;
 	}
 }
 
-static void procEndif(void)
+static void processEndif(void)
 {
-	if (ifstack.depth <= 0)
+	if (conditionalStack.depth <= 0)
+	{
 		error("prepro", "#endif without #if");
-	ifstack.skip[ifstack.depth] = 0;
-	ifstack.done[ifstack.depth] = 0;
-	ifstack.depth--;
+	}
+	conditionalStack.skip[conditionalStack.depth] = 0;
+	conditionalStack.branchTaken[conditionalStack.depth] = 0;
+	conditionalStack.elseSeen[conditionalStack.depth] = 0;
+	--conditionalStack.depth;
 }
 
-static void procIf(char *str, HASH *pHash)
+static void processElif(char *str, HASH *pHash)
 {
-	if (ifstack.depth >= MAX_IF_DEPTH - 1)
+	int result;
+	if (conditionalStack.depth <= 0)
+	{
+		error("prepro", "#elif without #if");
+	}
+	if (conditionalStack.elseSeen[conditionalStack.depth])
+	{
+		error("prepro", "#elif after #else");
+	}
+	if (parentShouldSkip())
+	{
+		conditionalStack.skip[conditionalStack.depth] = 1;
+		return;
+	}
+	if (conditionalStack.branchTaken[conditionalStack.depth])
+	{
+		conditionalStack.skip[conditionalStack.depth] = 1;
+		return;
+	}
+	result = preproEvalExpression(str, pHash);
+	conditionalStack.skip[conditionalStack.depth] = !result;
+	conditionalStack.branchTaken[conditionalStack.depth] = result;
+}
+
+static void processIf(char *str, HASH *pHash)
+{
+	int result;
+	int parentSkipping;
+	if (conditionalStack.depth >= MAX_IF_DEPTH - 1)
+	{
 		error("prepro", "#if nesting too deep");
-	ifstack.depth++;
-	
-	char *p = str;
-	while (*p && *p <= ' ') p++;
-	
-	int result = 0;
-	int negate = 0;
-	
-	/* Suporta !defined(X) e defined(X) */
-	if (*p == '!')
-	{
-		negate = 1;
-		p++;
-		while (*p && *p <= ' ') p++;
 	}
-	
-	if (strncmp(p, "defined", 7) == 0)
-	{
-		p += 7;
-		while (*p && (*p <= ' ' || *p == '(')) p++;
-		char *end = p;
-		while (*end && *end != ')' && *end > ' ') end++;
-		char save = *end;
-		*end = '\0';
-		result = (get(p, pHash) != NULL);
-		*end = save;
-	}
-	else
-	{
-		/* Avalia como número: 0 = false, != 0 = true */
-		result = (atoi(p) != 0);
-	}
-	
-	if (negate) result = !result;
-	ifstack.skip[ifstack.depth] = !result;
-	ifstack.done[ifstack.depth] = result;
+	parentSkipping = shouldSkip();
+	result = parentSkipping ? 0 : preproEvalExpression(str, pHash);
+	++conditionalStack.depth;
+	conditionalStack.skip[conditionalStack.depth] = !result;
+	conditionalStack.branchTaken[conditionalStack.depth] = result;
+	conditionalStack.elseSeen[conditionalStack.depth] = 0;
 }
 
-static void procPragma(char *p)
+static void processPragma(char *p)
 {
-	strtok(p, "\"");
-	char *q = strtok(NULL, ".");
-	sprintf(cmd.impfiles + strlen(cmd.impfiles), "%s.dll;", q);
+	char *begin;
+	char *end;
+	size_t used;
+	size_t nameLength;
+	while (*p == ' ' || *p == '\t')
+	{
+		++p;
+	}
+	if (strncmp(p, "comment", 7) != 0)
+	{
+		return;
+	}
+	begin = strchr(p + 7, '"');
+	if (begin == NULL)
+	{
+		error("prepro", "malformed #pragma comment");
+	}
+	end = strchr(++begin, '"');
+	if (end == NULL)
+	{
+		error("prepro", "malformed #pragma comment library name");
+	}
+	nameLength = (size_t)(end - begin);
+	used = strlen(cmd.impfiles);
+	if (used + nameLength + 6U > sizeof(cmd.impfiles))
+	{
+		error("prepro", "import library list is too large");
+	}
+	memcpy(cmd.impfiles + used, begin, nameLength);
+	memcpy(cmd.impfiles + used + nameLength, ".dll;", 6U);
 }
 
-/*============================================================================
- * Gerenciamento de Linhas de Código
- *============================================================================*/
+/* Source-line storage */
 
-static void addLine(char *srccode, int nFile, int nLine)
+static void addLine(const char *srccode, int nFile, int nLine)
 {
 	if (mcc.nSrcLine >= mcc.sizeSrcLine)
 	{
 		mcc.sizeSrcLine = mcc.sizeSrcLine * 3 / 2;
-		mcc.pSrcLine = xrealloc(mcc.pSrcLine, mcc.sizeSrcLine*sizeof(SRCLINE));
+		mcc.pSrcLine = xrealloc(mcc.pSrcLine, mcc.sizeSrcLine * sizeof(SRCLINE));
 	}
 	SRCLINE *pSL = &mcc.pSrcLine[mcc.nSrcLine++];
 	pSL->filenumber = nFile;
 	pSL->linenumber = nLine;
 	pSL->srccode = xstrdup(srccode);
-	if (opt&oSRC) printf("%2d %3d: %s\n", nFile, nLine, srccode);
+	if (opt & oSRC)
+	{
+		printf("%2d %3d: %s\n", nFile, nLine, srccode);
+	}
 }
 
-/*============================================================================
- * Preprocessador Principal
- *============================================================================*/
+void preproAddSyntheticLine(const char *source, int line)
+{
+	addLine(source, -1, line);
+}
+
+/* Main preprocessing pass */
 
 void prepro(char *srcfile)
 {
-	char buf[512], out[512], key[64], *p, *pBgn, *q;
-	int  nLine, nFile = mcc.nSrcFile++;
+	char key[64], *p, *pBgn, *q;
+	int nLine;
+	int nextLine = 1;
+	int initialIfDepth = conditionalStack.depth;
+	int nFile;
+	key[0] = '\0';
+	if (mcc.nSrcFile >= (int)(sizeof(mcc.srcFile) / sizeof(mcc.srcFile[0])))
+	{
+		error("prepro", "too many source and include files");
+	}
+	nFile = mcc.nSrcFile++;
 
 	FILE *fpSrc = fopen(srcfile, "r");
-	if (fpSrc == NULL) error("prepro", "file '%s' not found", srcfile);
-	mcc.srcFile[nFile] = xstrdup(srcfile);
-	int  fComment = 0;
-	for (nLine = 1; fgets(buf, sizeof(buf), fpSrc) != NULL; nLine++)
+	if (fpSrc == NULL)
 	{
+		error("prepro", "file '%s' not found", srcfile);
+	}
+	mcc.srcFile[nFile] = xstrdup(srcfile);
+	int fComment = 0;
+	for (;;)
+	{
+		char *buf = readLogicalLine(fpSrc, &nextLine, &nLine);
+		char *out;
+		size_t outCapacity;
+		int expansionCount = 0;
+		if (buf == NULL)
+		{
+			break;
+		}
+		outCapacity = strlen(buf) + 1U;
+		out = xalloc(outCapacity);
 		mcc.nPreFile = nFile;
 		mcc.lines[nFile] = nLine;
 		if (fComment)
 		{
-			if ((p = strstr(buf, "*/")) == NULL) continue;
-			strcpy(buf, p + 2);
+			if ((p = strstr(buf, "*/")) == NULL)
+			{
+				free(out);
+				free(buf);
+				continue;
+			}
+			memmove(buf, p + 2, strlen(p + 2) + 1U);
 			fComment = 0;
 		}
 		fComment = parseline(buf, out);
-		for (p = out; *p != '\0' && *p <= ' '; p++);
-		if (*p == '\0') continue;
-		/* Diretivas condicionais - sempre processadas */
-		if (strncmp(out, "#ifdef", 6) == 0)
+		for (p = out; *p != '\0' && *p <= ' '; p++)
+			;
+		if (*p == '\0')
 		{
-			procIfdef(out + 6, &mcc.hash, 0);
+			free(out);
+			free(buf);
+			continue;
 		}
-		else if (strncmp(out, "#ifndef", 7) == 0)
+		/* Conditional directives remain active inside skipped regions. */
+		if (strncmp(p, "#ifdef", 6) == 0 && (p[6] == '\0' || p[6] <= ' '))
 		{
-			procIfdef(out + 7, &mcc.hash, 1);
+			processIfdef(p + 6, &mcc.hash, 0);
 		}
-		else if (strncmp(out, "#if", 3) == 0 && (out[3] == ' ' || out[3] == '\t'))
+		else if (strncmp(p, "#ifndef", 7) == 0 && (p[7] == '\0' || p[7] <= ' '))
 		{
-			procIf(out + 3, &mcc.hash);
+			processIfdef(p + 7, &mcc.hash, 1);
 		}
-		else if (strncmp(out, "#elif", 5) == 0)
+		else if (strncmp(p, "#if", 3) == 0 && (p[3] == '\0' || p[3] <= ' '))
 		{
-			procElif(out + 5, &mcc.hash);
+			processIf(p + 3, &mcc.hash);
 		}
-		else if (strncmp(out, "#else", 5) == 0)
+		else if (strncmp(p, "#elif", 5) == 0 && (p[5] == '\0' || p[5] <= ' '))
 		{
-			procElse();
+			processElif(p + 5, &mcc.hash);
 		}
-		else if (strncmp(out, "#endif", 6) == 0)
+		else if (strncmp(p, "#else", 5) == 0 && (p[5] == '\0' || p[5] <= ' '))
 		{
-			procEndif();
+			processElse();
+		}
+		else if (strncmp(p, "#endif", 6) == 0 && (p[6] == '\0' || p[6] <= ' '))
+		{
+			processEndif();
 		}
 		else if (shouldSkip())
 		{
-			/* Pula código dentro de bloco condicional falso */
+			/* Skip source in an inactive conditional branch. */
+			free(out);
+			free(buf);
 			continue;
 		}
-		else if (strncmp(out, "#include", 8) == 0)
+		else if (strncmp(p, "#include", 8) == 0 && (p[8] == '\0' || p[8] <= ' '))
 		{
-			procInclude(srcfile, out + 8);
+			processInclude(srcfile, p + 8);
 		}
-		else if (strncmp(out, "#define", 7) == 0)
+		else if (strncmp(p, "#define", 7) == 0 && (p[7] == '\0' || p[7] <= ' '))
 		{
-			procDefine(out + 7, &mcc.hash);
+			processDefine(p + 7, &mcc.hash);
 		}
-		else if (strncmp(out, "#undef", 6) == 0)
+		else if (strncmp(p, "#undef", 6) == 0 && (p[6] == '\0' || p[6] <= ' '))
 		{
-			procUndef(out + 6, &mcc.hash);
+			processUndef(p + 6, &mcc.hash);
 		}
-		else if (strncmp(out, "#pragma", 7) == 0)
+		else if (strncmp(p, "#pragma", 7) == 0 && (p[7] == '\0' || p[7] <= ' '))
 		{
-			procPragma(out + 7);
+			processPragma(p + 7);
 		}
-		else if (strncmp(out, "#error", 6) == 0)
+		else if (strncmp(p, "#error", 6) == 0 && (p[6] == '\0' || p[6] <= ' '))
 		{
-			error("prepro", "%s", out + 6);
+			error("prepro", "%s", p + 6);
 		}
-		else if (strncmp(out, "#warning", 8) == 0)
+		else if (strncmp(p, "#warning", 8) == 0 && (p[8] == '\0' || p[8] <= ' '))
 		{
-			fprintf(stderr, "warning: %s\n", out + 8);
+			if (cmd.warningsAsErrors)
+			{
+				error("prepro", "#warning:%s", p + 8);
+			}
+			fprintf(stderr, "warning: %s\n", p + 8);
 		}
-		else if (strncmp(out, "#line", 5) == 0)
+		else if (strncmp(p, "#line", 5) == 0 && (p[5] == '\0' || p[5] <= ' '))
 		{
 			/* #line NUMBER ["FILENAME"] */
-			char *lp = out + 5;
-			while (*lp && *lp <= ' ') lp++;
+			char *lp = p + 5;
+			while (*lp && *lp <= ' ')
+			{
+				lp++;
+			}
 			int newLine = atoi(lp);
-			if (newLine > 0) nLine = newLine - 1;
-			while (*lp && *lp > ' ' && *lp != '"') lp++;
-			while (*lp && *lp <= ' ') lp++;
+			if (newLine > 0)
+			{
+				nextLine = newLine;
+			}
+			while (*lp && *lp > ' ' && *lp != '"')
+			{
+				lp++;
+			}
+			while (*lp && *lp <= ' ')
+			{
+				lp++;
+			}
 			if (*lp == '"')
 			{
 				lp++;
@@ -740,9 +1153,9 @@ void prepro(char *srcfile)
 			{
 				if (*p == '"' || *p == '\'')
 				{
-					p = endOfQuote(p);
+					p = skipQuotedLiteral(p);
 				}
-				else if (!isAlpha(*p))
+				else if (!isIdentifierStart(*p))
 				{
 					if (*p++ == '(' && (strcmp(key, "main") == 0 || strcmp(key, "WinMain") == 0))
 					{
@@ -752,23 +1165,40 @@ void prepro(char *srcfile)
 				}
 				else
 				{
-					for (q = key, pBgn = p; isAlNum(*p);) *q++ = *p++;
+					for (q = key, pBgn = p; isIdentifierContinue(*p);)
+					{
+						if ((size_t)(q - key) + 1U >= sizeof(key))
+						{
+							error("prepro",
+							      "identifier exceeds %u characters",
+							      (unsigned int)sizeof(key) - 1U);
+						}
+						*q++ = *p++;
+					}
 					*q = '\0';
 					char *val = NULL;
 					char tmpval[4096];
 					int freeArgs = 0;
 					char *args[MAX_MACRO_PARAMS];
 					int nArgs = 0;
-					
-					/* Macros predefinidas ISO C99 */
+
+					/* ISO C99 predefined macros */
 					if (strcmp(key, "__FILE__") == 0)
 					{
-						sprintf(tmpval, "\"%s\"", srcfile);
+						int written = snprintf(tmpval, sizeof(tmpval), "\"%s\"", srcfile);
+						if (written < 0 || (size_t)written >= sizeof(tmpval))
+						{
+							error("prepro", "expanded __FILE__ value is too long");
+						}
 						val = tmpval;
 					}
 					else if (strcmp(key, "__LINE__") == 0)
 					{
-						sprintf(tmpval, "%d", nLine);
+						int written = snprintf(tmpval, sizeof(tmpval), "%d", nLine);
+						if (written < 0 || (size_t)written >= sizeof(tmpval))
+						{
+							error("prepro", "expanded __LINE__ value is too long");
+						}
 						val = tmpval;
 					}
 					else if (strcmp(key, "__STDC__") == 0)
@@ -789,12 +1219,31 @@ void prepro(char *srcfile)
 					}
 					else
 					{
-						/* Verifica se é macro com parâmetros */
+						/* Function-like macro */
 						MacroDef *m = findMacro(key);
-						if (m != NULL && *p == '(')
+						char *invocation = p;
+						while (*invocation == ' ' || *invocation == '\t')
+						{
+							++invocation;
+						}
+						if (m != NULL && *invocation == '(')
 						{
 							char *endArgs;
-							nArgs = extractMacroArgs(p, args, MAX_MACRO_PARAMS, &endArgs);
+							nArgs = extractMacroArgs(invocation, args, MAX_MACRO_PARAMS, &endArgs);
+							if (nArgs == 0 && m->parameterCount == 1)
+							{
+								args[nArgs++] = xstrdup("");
+							}
+							if ((!m->variadic && nArgs != m->parameterCount) ||
+							    (m->variadic && nArgs < m->parameterCount))
+							{
+								error("prepro",
+								      "macro '%s' expects %d argument%s, got %d",
+								      m->name,
+								      m->parameterCount,
+								      m->parameterCount == 1 ? "" : "s",
+								      nArgs);
+							}
 							freeArgs = 1;
 							expandFunctionMacro(m, args, nArgs, tmpval, sizeof(tmpval));
 							val = tmpval;
@@ -802,113 +1251,103 @@ void prepro(char *srcfile)
 						}
 						else
 						{
-							val = get(key, &mcc.hash);
+							val = hashGet(key, &mcc.hash);
 						}
 					}
 					if (val != NULL)
 					{
-						int vlen = strlen(val);
-						memmove(pBgn + vlen, p, strlen(p) + 1);
+						size_t vlen = strlen(val);
+						size_t prefix = (size_t)(pBgn - out);
+						size_t suffix = strlen(p);
+						if (++expansionCount > 4096)
+						{
+							error("prepro",
+							      "recursive or excessive macro expansion involving '%s'",
+							      key);
+						}
+						if (prefix + vlen + suffix + 1U > outCapacity)
+						{
+							size_t pOffset = (size_t)(p - out);
+							size_t required = prefix + vlen + suffix + 1U;
+							while (outCapacity < required)
+							{
+								if (outCapacity > SIZE_MAX / 2U)
+								{
+									error("prepro", "expanded source line is too large");
+								}
+								outCapacity *= 2U;
+							}
+							out = xrealloc(out, outCapacity);
+							pBgn = out + prefix;
+							p = out + pOffset;
+						}
+						memmove(pBgn + vlen, p, suffix + 1U);
 						memmove(pBgn, val, vlen);
-						p = pBgn;
+						p = strcmp(key, val) == 0 ? pBgn + vlen : pBgn;
 					}
-					/* Libera argumentos alocados */
+					/* Release parsed arguments. */
 					if (freeArgs)
 					{
 						for (int i = 0; i < nArgs; i++)
+						{
 							free(args[i]);
+						}
 					}
 				}
 			}
 			addLine(out, nFile, nLine);
 		}
+		free(out);
+		free(buf);
+	}
+	if (fComment)
+	{
+		error("prepro", "unterminated block comment in '%s'", srcfile);
+	}
+	if (conditionalStack.depth != initialIfDepth)
+	{
+		error("prepro", "unterminated conditional directive in '%s'", srcfile);
 	}
 	fclose(fpSrc);
-	if (opt&oDLL) mcc.typeApp = 0;
-	if (opt&oLINES && strstr(srcfile, "include\\") == NULL)
+	if (opt & oDLL)
 	{
-		mcc.totalLines += nLine;
-		printf("%-24s\t%5d\n", srcfile, nLine - 1);
+		mcc.typeApp = 0;
+	}
+	if (opt & oLINES && strstr(srcfile, "include\\") == NULL)
+	{
+		mcc.totalLines += nextLine - 1;
+		printf("%-24s\t%5d\n", srcfile, nextLine - 1);
 	}
 }
 
-/*============================================================================
- * Inicialização e Startup
- *============================================================================*/
+/* Initialization and target startup */
 
 void initPrepro(void)
 {
 	mcc.sizeSrcLine = 1000;
 	mcc.pSrcLine = xalloc(mcc.sizeSrcLine * sizeof(SRCLINE));
-	
-	/* Inicializa macros __DATE__ e __TIME__ */
+	hashPut("__CC__", "1", &mcc.hash);
+	hashPut("__STDC__", "1", &mcc.hash);
+	hashPut("__STDC_VERSION__", "199901L", &mcc.hash);
+	hashPut("__STDC_HOSTED__", "1", &mcc.hash);
+	cmd.target->definePredefinedMacros(&compiler);
+
+	/* Initialize __DATE__ and __TIME__. */
 	time_t t = time(NULL);
 	struct tm *tm = localtime(&t);
-	static const char *months[] = {"Jan","Feb","Mar","Apr","May","Jun",
-	                               "Jul","Aug","Sep","Oct","Nov","Dec"};
+	static const char *months[] = {
+	    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+	if (tm == NULL)
+	{
+		error("prepro", "cannot read the local time");
+	}
 	sprintf(macro_date, "\"%s %2d %d\"", months[tm->tm_mon], tm->tm_mday, tm->tm_year + 1900);
 	sprintf(macro_time, "\"%02d:%02d:%02d\"", tm->tm_hour, tm->tm_min, tm->tm_sec);
-	
-	/* Variáveis de controle FPU x86 - não necessárias para HLASM */
-	if (g_backend != BACKEND_HLASM)
-	{
-		addLine("short _RoundNear = 0x137F;", -1, 1);
-		addLine("short _RoundChop = 0x1F7F;", -1, 2);
-	}
-}
 
-static void addStartupWindows(void)
-{
-	int n = 3;
-	addLine("void _main() {", -1, n++);
-	if (mcc.typeApp == 3)  		// CUI
-	{
-		addLine("  char **argv, **env;", -1, n++);
-		addLine("  int argc, new_mode = 0;", -1, n++);
-		addLine("  __set_app_type(1);", -1, n++);
-		addLine("  _controlfp(0x10000, 0x30000);", -1, n++);
-		addLine("  __getmainargs(&argc, &argv, &env, 0, &new_mode);", -1, n++);
-		addLine("  exit(main(argc, argv, env));", -1, n++);
-	}
-	else if (mcc.typeApp == 2)  	// GUI
-	{
-		addLine("  STARTUPINFOA si;", -1, n++);
-		addLine("  __set_app_type(2);", -1, n++);
-		addLine("  _controlfp(0x10000, 0x30000);", -1, n++);
-		addLine("  char *p = GetCommandLineA();", -1, n++);
-		addLine("  int c = (*p++ == '\"') ? '\"' : ' ';", -1, n++);
-		addLine("  while (*p != c && *p != 0) p++;", -1, n++);
-		addLine("  if (*p != 0) p++;", -1, n++);
-		addLine("  while (*p <= ' ' && *p != 0) p++;", -1, n++);
-		addLine("  GetStartupInfoA(&si);", -1, n++);
-		addLine("  exit(WinMain(GetModuleHandleA((void*)0), (void*)0,", -1, n++);
-		addLine("       p, (si.dwFlags&1) ? si.wShowWindow : 10));", -1, n++);
-	}
-	else  	// DLL
-	{
-		addLine("  return 1;", -1, n++);
-	}
-	addLine("}", -1, n++);
-}
-
-static void addStartupHLASM(void)
-{
-	int n = 3;
-	/* z/OS startup - chama main() diretamente sem runtime Windows */
-	addLine("void _main() {", -1, n++);
-	addLine("  int rc;", -1, n++);
-	addLine("  rc = main();", -1, n++);
-	addLine("}", -1, n++);
+	cmd.target->addRuntimePrelude(&compiler);
 }
 
 void addStartup(void)
 {
-	if (g_backend == BACKEND_HLASM)
-	{
-		addStartupHLASM();
-	}
-	else
-	{
-		addStartupWindows();
-	}
+	cmd.target->addStartup(&compiler);
 }

@@ -1,7 +1,10 @@
 # Build artifacts
+build/
+build_*/
 *.o
 *.exe
 *.dll
+*.obj
 
 # Compiler output
 cc

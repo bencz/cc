@@ -1,0 +1,52 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-x86-debug",
+      "displayName": "Windows x86 Debug",
+      "generator": "NMake Makefiles",
+      "binaryDir": "${sourceDir}/build/windows-x86-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "portable-debug",
+      "displayName": "Portable Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/portable-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "BUILD_TESTING": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-x86-debug",
+      "configurePreset": "windows-x86-debug"
+    },
+    {
+      "name": "portable-debug",
+      "configurePreset": "portable-debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-x86-debug",
+      "configurePreset": "windows-x86-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "portable-debug",
+      "configurePreset": "portable-debug",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

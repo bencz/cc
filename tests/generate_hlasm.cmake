@@ -1,0 +1,63 @@
+set(compiler_arguments --target=zos-hlasm -S "${SOURCE}" -o "${OUTPUT}")
+if(DEFINED JCL)
+    list(APPEND compiler_arguments "--zos-jcl=${JCL}")
+endif()
+execute_process(
+    COMMAND "${COMPILER}" ${compiler_arguments}
+    RESULT_VARIABLE compile_result
+    OUTPUT_VARIABLE compiler_output
+    ERROR_VARIABLE compiler_error
+)
+if(NOT compile_result EQUAL 0)
+    message(FATAL_ERROR "HLASM generation failed (${compile_result}):\n${compiler_output}${compiler_error}")
+endif()
+
+file(STRINGS "${OUTPUT}" assembler_lines)
+set(line_number 0)
+foreach(line IN LISTS assembler_lines)
+    math(EXPR line_number "${line_number} + 1")
+    string(LENGTH "${line}" line_length)
+    if(line_length GREATER 72)
+        message(FATAL_ERROR "${OUTPUT}:${line_number}: record exceeds column 72")
+    endif()
+    if(line_length EQUAL 72)
+        string(SUBSTRING "${line}" 71 1 continuation)
+        if(continuation STREQUAL " ")
+            message(FATAL_ERROR "${OUTPUT}:${line_number}: blank continuation indicator")
+        endif()
+    endif()
+    if(line MATCHES "TODO|FIXME|not implemented|opcode [0-9]+")
+        message(FATAL_ERROR "${OUTPUT}:${line_number}: incomplete lowering marker")
+    endif()
+endforeach()
+
+if(DEFINED JCL)
+    file(READ "${JCL}" jcl)
+    foreach(required_jcl "PGM=ASMA90" "OBJECT,GOFF,RENT" "DSN=CEE.SCEEMAC"
+                         "PGM=IEWL" "DSN=CEE.SCEELKED" "COND=(0,NE,ASM)"
+                         "//RUN EXEC PGM=")
+        string(FIND "${jcl}" "${required_jcl}" position)
+        if(position EQUAL -1)
+            message(FATAL_ERROR "${JCL}: required JCL construct '${required_jcl}' is absent")
+        endif()
+    endforeach()
+endif()
+
+file(READ "${OUTPUT}" assembler)
+get_filename_component(source_name "${SOURCE}" NAME_WE)
+if(source_name STREQUAL "test_execution_charset")
+    foreach(character_bytes "X'000000C1'" "X'00000041'" "X'C100'" "X'4100'")
+        string(FIND "${assembler}" "${character_bytes}" position)
+        if(position EQUAL -1)
+            message(FATAL_ERROR "${OUTPUT}: execution-character bytes '${character_bytes}' are absent")
+        endif()
+    endforeach()
+endif()
+foreach(required "CCPROG   RSECT" "CCDATA   CSECT" "CEEENTRY" "CEETERM"
+                 "CEEPPA" "CEEDSA" "CEECAA" "AMODE    31" "RMODE    ANY"
+                 "END      F")
+    string(FIND "${assembler}" "${required}" position)
+    if(position EQUAL -1)
+        message(FATAL_ERROR "${OUTPUT}: required LE construct '${required}' is absent")
+    endif()
+endforeach()

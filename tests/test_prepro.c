@@ -1,4 +1,4 @@
-/* Teste do preprocessador ISO C99 */
+/* ISO C99 preprocessing. */
 
 #define VERSION 100
 #define EMPTY
@@ -38,7 +38,7 @@ int if_one = 1;
 int if_zero_should_not_appear = 1;
 #endif
 
-/* Teste de macros com parâmetros */
+/* Function-like macros */
 #define SQUARE(x) ((x) * (x))
 #define ADD(a, b) ((a) + (b))
 #define MUL3(a, b, c) ((a) * (b) * (c))
@@ -47,26 +47,26 @@ int square_test = SQUARE(5);
 int add_test = ADD(10, 20);
 int mul3_test = MUL3(2, 3, 4);
 
-/* Teste do operador # (stringify) */
+/* Stringification */
 #define STRINGIFY(x) #x
 
 char *str_test = STRINGIFY(hello);
 
-/* Teste do operador ## (concatenação) */
-#define MAKE_VAR(n) var_ ## n
+/* Token pasting */
+#define MAKE_VAR(n) var_##n
 
 int MAKE_VAR(1) = 100;
 int MAKE_VAR(2) = 200;
 
-/* Teste de macros variádicas */
+/* Variadic macros */
 #define VARARGS_TEST(...) __VA_ARGS__
 
 int varargs_result = VARARGS_TEST(1 + 2 + 3);
 
 int main()
 {
-    int result = square_test + add_test + mul3_test;
-    result = result + MAKE_VAR(1) + MAKE_VAR(2);
-    result = result + varargs_result;
-    return result;
+	int result = square_test + add_test + mul3_test;
+	result = result + MAKE_VAR(1) + MAKE_VAR(2);
+	result = result + varargs_result;
+	return result;
 }

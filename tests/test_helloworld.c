@@ -1,7 +1,8 @@
-/* test_helloworld.c - Teste de Hello World com printf */
+/* Basic printf call. */
 #include <stdio.h>
 
-int main() {
-    printf("Ola Mundo!\n");
-    return 0;
+int main()
+{
+	printf("Ola Mundo!\n");
+	return 0;
 }
