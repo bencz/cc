@@ -22,7 +22,8 @@ typedef enum
 	IR_TYPE_VOID = 0,
 	IR_TYPE_INTEGER,
 	IR_TYPE_FLOAT,
-	IR_TYPE_POINTER
+	IR_TYPE_POINTER,
+	IR_TYPE_AGGREGATE
 } IrTypeKind;
 
 typedef struct _IrType
@@ -67,6 +68,10 @@ typedef enum
 	IR_OP_CONVERT,
 	IR_OP_CALL,
 	IR_OP_CALL_INDIRECT,
+	IR_OP_VA_START,
+	IR_OP_VA_ARGUMENT,
+	IR_OP_VA_COPY,
+	IR_OP_VA_END,
 	IR_OP_BRANCH,
 	IR_OP_BRANCH_CONDITIONAL,
 	IR_OP_RETURN
@@ -202,6 +207,7 @@ IrType irTypeInteger(unsigned int bits, int isUnsigned, unsigned int alignment);
 IrType irTypeFloat(unsigned int bits, unsigned int alignment);
 IrType irTypePointer(unsigned int bits, unsigned int alignment);
 int irTypesEqual(IrType left, IrType right);
+IrType *irCollectValueTypes(const IrFunction *function);
 IrFunction *irAddFunction(IrModule *module, IrSymbolId symbol, IrType returnType);
 IrSymbolId irCreateAnonymousSymbol(IrModule *module);
 IrGlobal *irAddGlobal(IrModule *module,
@@ -274,6 +280,8 @@ IrValueId irBuilderEmitCallIndirect(IrBuilder *builder,
                                     const IrValueId *arguments,
                                     int argumentCount);
 void irBuilderEmitBranch(IrBuilder *builder, IrBlockId destination);
+IrValueId irBuilderEmitVariadic(
+    IrBuilder *builder, IrOpcode opcode, IrType type, IrValueId address, IrValueId source);
 void irBuilderEmitConditionalBranch(IrBuilder *builder,
                                     IrValueId condition,
                                     IrBlockId trueBlock,

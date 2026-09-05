@@ -48,7 +48,10 @@ void outCode3(int code, int num, int attr)
 		error("outCode3", "code = %d", code);
 	}
 	reallocCode(1);
-	INSTRUCT inst = {code, num, attr};
+	INSTRUCT inst = {0};
+	inst.inst = code;
+	inst.num = num;
+	inst.attr = attr;
 	memcpy(&cd.pCode[ix.ixCode], &inst, sizeof(inst));
 	cd.pCode[ix.ixCode++].regs = instructionRegisters(code);
 }
@@ -194,6 +197,7 @@ void loadValue(int type, int fPtr)
 	int smallAggregate = !fPtr && !isIntegerType(type) && canonical != ID.T_VOID &&
 	                     canonical != ID.T_FLOAT && canonical != ID.T_DOUBLE &&
 	                     objectSize <= (int)sizeof(int);
+	type = canonical;
 
 	if ((isIntegerType(type) && objectSize == 4) || fPtr || (smallAggregate && objectSize == 4))
 	{
@@ -234,7 +238,7 @@ void loadValue(int type, int fPtr)
 	{
 		outCode1(movsx_eax_wax);
 	}
-	else if (type == ID.T_DOUBLE)
+	else if (isFloatingType(type))
 	{
 		if (*pI == lea_eax_pbp)
 		{
@@ -319,7 +323,10 @@ void expr2(int mode)
 
 void setValue(int mode, int ptrs, int type, VALUE *pv)
 {
-	VALUE val = {mode, ptrs, type};
+	VALUE val = {0};
+	val.mode = mode;
+	val.ptrs = ptrs;
+	val.type = type;
 	val.irValue = IR_VALUE_NONE;
 	val.irAddress = IR_VALUE_NONE;
 	val.constantSymbol = IR_SYMBOL_NONE;

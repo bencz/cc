@@ -200,7 +200,7 @@ INSTRUCTION x86Instructions[] = {
     {jg, "0F8F", "7F", "jg ", 5 | X},
     {call, "E8", Z, "call fn_%04d", 4 | X},
     {call_eax, "FFD0", Z, "call eax", A},
-    {xent, "5589E5", Z, "push ebp&mov ebp,esp"},
+    {xent, "5589E5", Z, "push ebp&mov ebp,esp", 0},
     {xret, "C9C3", "C9C2", "leave&ret", X},
     {sete_eax, "B8000000000F94C0", Z, "sete eax", X},
     {setne_eax, "B8000000000F95C0", Z, "setne eax", X},
@@ -212,18 +212,24 @@ INSTRUCTION x86Instructions[] = {
     {setae_eax, "B8000000000F93C0", Z, "setae eax", X},
     {setbe_eax, "B8000000000F96C0", Z, "setbe eax", X},
     {seta_eax, "B8000000000F97C0", Z, "seta eax", X},
-    {fchs, "D9E0", Z, "fchs"},
-    {fxch_st1, "D9C9", Z, "fxch st(1)"},
+    {fchs, "D9E0", Z, "fchs", 0},
+    {fxch_st1, "D9C9", Z, "fxch st(1)", 0},
     {fld_qax, "DD00", Z, "fld qp[eax]", A},
     {fld_qcx, "DD01", Z, "fld qp[ecx]", C},
     {fst_qax, "DD10", Z, "fst qp[eax]", A},
     {fst_qcx, "DD11", Z, "fst qp[ecx]", C},
     {fld_qbp, "DD85", "DD45", "fld qp[ebp%+d]", 5},
     {fld_qp, "DD05", Z, "fld qp[off_%p]", 4},
+    {fld_sax, "D900", Z, "fld dp[eax]", A},
+    {fld_sbp, "D985", "D945", "fld dp[ebp%+d]", 5},
+    {fstp_sbp, "D99D", "D95D", "fstp dp[ebp%+d]", 5},
+    {fstp_scx, "D919", Z, "fstp dp[ecx]", C},
+    {fstp_qcx, "DD19", Z, "fstp qp[ecx]", C},
+    {fstp_ssp, "D91C24", Z, "fstp dp[esp]", 0},
     {fldcw, "D92D", Z, "fldcw [off_%p]", 4},
-    {fstp_qsp, "DD5C2400", Z, "fstp qp[esp]"},
-    {fstsw, "DFE0", Z, "fstsw"},
-    {fstp_st1, "DDD9", Z, "fstp st1"},
+    {fstp_qsp, "DD5C2400", Z, "fstp qp[esp]", 0},
+    {fstsw, "DFE0", Z, "fstsw", 0},
+    {fstp_st1, "DDD9", Z, "fstp st1", 0},
     {fst_qbp, "DD95", "DD55", "fst qp[ebp%+d]", 5},
     {fstp_qbp, "DD9D", "DD5D", "fstp qp[ebp%+d]", 5},
     {fadd_qbp, "DC85", "DC45", "fadd qp[ebp%+d]", 5},
@@ -234,25 +240,25 @@ INSTRUCTION x86Instructions[] = {
     {fsub_qp, "DC25", Z, "fsub qp[%d]", 4},
     {fmul_qp, "DC0D", Z, "fmul qp[%d]", 4},
     {fdiv_qp, "DC35", Z, "fdiv qp[%d]", 4},
-    {faddp_st1_st, "DEC1", Z, "faddp st1,st"},
-    {fmulp_st1_st, "DEC9", Z, "fmulp st1,st"},
-    {fsubrp_st1_st, "DEE9", Z, "fsubrp st1,st"},
-    {fdivrp_st1_st, "DEF9", Z, "fdivrp st1,st"},
+    {faddp_st1_st, "DEC1", Z, "faddp st1,st", 0},
+    {fmulp_st1_st, "DEC9", Z, "fmulp st1,st", 0},
+    {fsubrp_st1_st, "DEE9", Z, "fsubrp st1,st", 0},
+    {fdivrp_st1_st, "DEF9", Z, "fdivrp st1,st", 0},
     {fistp_dsp, Z, "DB5C24", "fistp dp[esp%+d]", 1},
     {fistp_ueax, "83EC08DF3C245883C404", Z, "fistp unsigned eax", X},
     {fild_dax, "DB00", Z, "fild dp[eax]", A},
     {fild_dsp, "DB8424", "DB4424", "fild dp[esp%+d]", 5},
     {fild_uax, "6A0050DF2C2483C408", Z, "fild unsigned eax", X},
     {fild_udsp, "6A00FF742404DF2C2483C408", Z, "fild unsigned [esp]", X},
-    {fucompp, "DAE9", Z, "fucompp"},
+    {fucompp, "DAE9", Z, "fucompp", 0},
     {xdiv_ecx, "99F7F9", Z, "cdq&idiv ecx", X},
     {xmod_ecx, "99F7F989D0", Z, "cdq&idiv ecx&mov eax,edx", X},
     {udiv_ecx, "31D2F7F1", Z, "xor edx,edx&div ecx", X},
     {umod_ecx, "31D2F7F189D0", Z, "xor edx,edx&div ecx&mov eax,edx", X},
-    {setint, "", Z, "setint %d @%d"},
-    {setreal, "", Z, "setreal %.3f @%d"},
-    {setstr, "", Z, "setstr '%s' @%d"},
-    {setaddr, "", Z, "setaddr %d @%d"},
+    {setint, "", Z, "setint %d @%d", 0},
+    {setreal, "", Z, "setreal %.3f @%d", 0},
+    {setstr, "", Z, "setstr '%s' @%d", 0},
+    {setaddr, "", Z, "setaddr %d @%d", 0},
     {fn_, Z, Z, "fn_%04d:", 4},
     {exp_, Z, Z, "exp fn_%04d:", 4},
     {loc_, Z, Z, "loc_%03d:", 4},
@@ -468,10 +474,10 @@ static int calculateImportTableSize(void)
 	return size;
 }
 
-static BYTE *buildImportTable(void)
+static uint8_t *buildImportTable(void)
 {
 	int i, n = 0, k;
-	DWORD *pImpt = xalloc((size_t)exe.lenImpt);
+	uint32_t *pImpt = xalloc((size_t)exe.lenImpt);
 	int nLookup = (exe.useDLL + 1) * 5;
 	int nImptAddr = nLookup + (exe.useDLL + exe.useFunc);
 	int nName = (nImptAddr + (exe.useDLL + exe.useFunc)) * 4;
@@ -504,7 +510,7 @@ static BYTE *buildImportTable(void)
 		n++;
 	}
 
-	return (BYTE *)pImpt;
+	return (uint8_t *)pImpt;
 }
 
 /*============================================================================
@@ -532,7 +538,7 @@ static int calculateExportTableSize(void)
 	for (n = 0; n < cd.hash.size; n++)
 	{
 		char *name = cd.hash.tbl[n].key;
-		int val = (int)cd.hash.tbl[n].val;
+		int val = (int)(intptr_t)cd.hash.tbl[n].val;
 		if (name != NULL && (val & AT_EXPT) != 0)
 		{
 			if (nExport >= (int)(sizeof(export) / sizeof(export[0])))
@@ -548,15 +554,15 @@ static int calculateExportTableSize(void)
 	return sizeof(IMAGE_EXPORT_DIRECTORY) + size;
 }
 
-static BYTE *buildExportTable(void)
+static uint8_t *buildExportTable(void)
 {
 	int exportIndex;
 	int directorySize = sizeof(IMAGE_EXPORT_DIRECTORY);
 	int tableAddress = mem.ExptAddr + directorySize;
 	char *buffer = xalloc(exe.lenExpt);
-	DWORD *addresses = (DWORD *)(buffer + directorySize);
-	DWORD *names = (DWORD *)(buffer + directorySize + 4 * nExport);
-	WORD *ordinals = (WORD *)(buffer + directorySize + 8 * nExport);
+	uint32_t *addresses = (uint32_t *)(buffer + directorySize);
+	uint32_t *names = (uint32_t *)(buffer + directorySize + 4 * nExport);
+	uint16_t *ordinals = (uint16_t *)(buffer + directorySize + 8 * nExport);
 	char *strings = buffer + directorySize + 10 * nExport;
 	IMAGE_EXPORT_DIRECTORY directory = {0};
 
@@ -583,10 +589,10 @@ static BYTE *buildExportTable(void)
 		names[exportIndex] = mem.ExptAddr + (strings - buffer);
 		strcpy(strings, export[exportIndex].name);
 		strings += strlen(export[exportIndex].name) + 1;
-		ordinals[exportIndex] = (WORD)exportIndex;
+		ordinals[exportIndex] = (uint16_t)exportIndex;
 	}
 
-	return (BYTE *)buffer;
+	return (uint8_t *)buffer;
 }
 
 /*============================================================================
@@ -628,22 +634,22 @@ static void prepareRelocations(void)
 	raw.RelocSize = (mem.RelocSize + RAWALIGN1) & ~RAWALIGN1;
 }
 
-static BYTE *buildRelocationTable(void)
+static uint8_t *buildRelocationTable(void)
 {
 	int n, k, relocIndex = 0;
-	BYTE *buf = xalloc(raw.RelocSize);
-	WORD *p = (WORD *)buf;
+	uint8_t *buf = xalloc(raw.RelocSize);
+	uint16_t *p = (uint16_t *)buf;
 
 	for (n = 0; n < exe.nPages; n++)
 	{
 		int *q = (int *)p;
 		*q++ = (n + 1) * 4096;
 		*q++ = 8 + ((exe.cnt[n] + 1) & ~1) * 2;
-		p = (WORD *)q;
+		p = (uint16_t *)q;
 
 		for (k = 0; k < exe.cnt[n]; k++)
 		{
-			*p++ = (WORD)(0x3000 + (exe.locs[relocIndex++] & 0x0FFF));
+			*p++ = (uint16_t)(0x3000 + (exe.locs[relocIndex++] & 0x0FFF));
 		}
 
 		if ((exe.cnt[n] & 1) != 0)
@@ -675,17 +681,21 @@ static void appendRelocation(int address)
 typedef struct _EXE_HEADER
 {
 	IMAGE_DOS_HEADER DosHeader;
-	BYTE DosStub[64];
-	DWORD Signature;
+	uint8_t DosStub[64];
+	uint32_t Signature;
 	IMAGE_FILE_HEADER FileHeader;
 	IMAGE_OPTIONAL_HEADER OptionalHeader;
 	IMAGE_SECTION_HEADER SectionHeaders[2];
 } EXE_HEADER;
 
-static void writePortableExecutable(
-    BYTE *bufImport, BYTE *bufExport, BYTE *CodeBuffer, int lenCode, BYTE *DataBuffer, int lenData)
+static void writePortableExecutable(uint8_t *bufImport,
+                                    uint8_t *bufExport,
+                                    uint8_t *CodeBuffer,
+                                    int lenCode,
+                                    uint8_t *DataBuffer,
+                                    int lenData)
 {
-	BYTE *bufReloc = NULL;
+	uint8_t *bufReloc = NULL;
 	int sizeImptAddrTable = (exe.useDLL + exe.useFunc) * 4;
 	int posImptAddrTable = mem.DataAddr + (exe.useDLL + 1) * 20 + sizeImptAddrTable;
 	int numSections = mcc.typeApp == 0 ? 3 : 2;
@@ -704,7 +714,7 @@ static void writePortableExecutable(
 	    "\x0E\x1F\xBA\x0E\x00\xB4\x09\xCD\x21\xB8\x01\x4C\xCD\x21"
 	    "This program cannot be run in DOS mode.\r\r\n$",
 	    0x00004550,
-	    {0x014c, (WORD)numSections, 0, 0, 0, (WORD)sizeof(IMAGE_OPTIONAL_HEADER), 0x030F},
+	    {0x014c, (uint16_t)numSections, 0, 0, 0, (uint16_t)sizeof(IMAGE_OPTIONAL_HEADER), 0x030F},
 	    {0x010B,
 	     0x06,
 	     0x00,
@@ -727,7 +737,7 @@ static void writePortableExecutable(
 	     exe.sizeImage,
 	     RAWALIGN,
 	     0,
-	     (WORD)typeApp,
+	     (uint16_t)typeApp,
 	     0,
 	     0x100000,
 	     0x1000,
@@ -782,7 +792,26 @@ static void writePortableExecutable(
 	                              0,
 	                              0x42000040};
 
-	BYTE *bufEXE = xalloc(raw.DataAddr + raw.DataSize);
+	uint8_t *bufEXE = xalloc(raw.DataAddr + raw.DataSize);
+	exeHeader.OptionalHeader.SizeOfCode = (uint32_t)raw.CodeSize;
+	exeHeader.OptionalHeader.SizeOfInitializedData = (uint32_t)raw.DataSize;
+	if (exe.useDLL == 0)
+	{
+		exeHeader.OptionalHeader.DataDirectory[1].VirtualAddress = 0;
+		exeHeader.OptionalHeader.DataDirectory[1].Size = 0;
+		exeHeader.OptionalHeader.DataDirectory[12].VirtualAddress = 0;
+		exeHeader.OptionalHeader.DataDirectory[12].Size = 0;
+	}
+	if (mcc.typeApp == 0)
+	{
+		exeHeader.FileHeader.Characteristics |= 0x2000U;
+		if (mem.RelocSize != 0)
+		{
+			exeHeader.FileHeader.Characteristics &= 0xFFFEU;
+			exeHeader.OptionalHeader.DataDirectory[5].VirtualAddress = (uint32_t)mem.RelocAddr;
+			exeHeader.OptionalHeader.DataDirectory[5].Size = (uint32_t)mem.RelocSize;
+		}
+	}
 	memcpy(bufEXE, &exeHeader, sizeof(exeHeader));
 	if (mcc.typeApp == 0)
 	{
@@ -911,8 +940,8 @@ static int setOffset(int *pLoc, int *pOffCode, int cnt)
 			{
 				exe.entryPoint = offCode;
 			}
-			int at = ((int)cd.hash.tbl[num].val) & 0xFF000000;
-			cd.hash.tbl[num].val = (void *)(at + offCode);
+			int at = ((int)(intptr_t)cd.hash.tbl[num].val) & 0xFF000000;
+			cd.hash.tbl[num].val = (void *)(intptr_t)(at + offCode);
 		}
 		else if (pI->mnemonic[0] == 'j')
 		{
@@ -1004,17 +1033,21 @@ void link(void)
 
 	exe.base = (opt & oDLL) ? DLLBASE : IMAGEBASE;
 	exe.entryPoint += mem.CodeAddr;
-	BYTE *bufImport = buildImportTable();
-	BYTE *bufExport = (opt & oDLL) ? buildExportTable() : NULL;
+	uint8_t *bufImport = buildImportTable();
+	uint8_t *bufExport = (opt & oDLL) ? buildExportTable() : NULL;
 	p = caText = xalloc(raw.CodeSize);
 	int dataAddr = exe.base + mem.DataAddr + posData;
 	for (n = 0; n < ix.ixCode; n++)
 	{
-		BYTE *q;
+		uint8_t *q;
 		instAt(n, &inst, &num, &attr, &size);
 		offset = cd.pCode[n].offset;
+		if (inst >= setint && inst <= setaddr)
+		{
+			continue;
+		}
 		INSTRUCTION *pI = &x86Instructions[inst - 1];
-		hexcode = size == 1 ? pI->hexcode2 : pI->hexcode;
+		hexcode = size == 1 || (inst == xret && num > 0) ? pI->hexcode2 : pI->hexcode;
 		if (hexcode == NULL)
 		{
 			continue;
@@ -1022,9 +1055,9 @@ void link(void)
 		int fReloc = TRUE;
 		if (pI->opcode == call)
 		{
-			int fImpt = (int)cd.hash.tbl[num].val & AT_IMPT;
-			int fUser = (int)cd.hash.tbl[num].val & AT_USER;
-			int addr = (int)cd.hash.tbl[num].val & AT_ADDR;
+			int fImpt = (int)(intptr_t)cd.hash.tbl[num].val & AT_IMPT;
+			int fUser = (int)(intptr_t)cd.hash.tbl[num].val & AT_USER;
+			int addr = (int)(intptr_t)cd.hash.tbl[num].val & AT_ADDR;
 			if (!fImpt && !fUser)
 			{
 				if (num < 0)
@@ -1052,7 +1085,7 @@ void link(void)
 		}
 		else if (attr == AD_CODE)
 		{
-			int foffset = (int)cd.hash.tbl[num].val & AT_ADDR;
+			int foffset = (int)(intptr_t)cd.hash.tbl[num].val & AT_ADDR;
 			num = exe.base + mem.CodeAddr + foffset;
 		}
 		else if (attr == AD_DATA)
@@ -1065,19 +1098,19 @@ void link(void)
 		}
 		else if (attr == AD_IMPORT)
 		{
-			num = exe.base + ((int)cd.hash.tbl[num].val & AT_ADDR);
+			num = exe.base + ((int)(intptr_t)cd.hash.tbl[num].val & AT_ADDR);
 		}
 		else
 		{
 			fReloc = FALSE;
 		}
-		for (q = (BYTE *)hexcode; *q != '\0'; q += 2)
+		for (q = (uint8_t *)hexcode; *q != '\0'; q += 2)
 		{
-			*p++ = (BYTE)((hexDigitValue(*q) << 4) + hexDigitValue(q[1]));
+			*p++ = (uint8_t)((hexDigitValue(*q) << 4) + hexDigitValue(q[1]));
 		}
 		if (size == 1)
 		{
-			*p = (BYTE)num;
+			*p = (uint8_t)num;
 		}
 		else if (size == 2)
 		{
@@ -1164,7 +1197,7 @@ void link(void)
 		exe.sizeImage = mem.DataAddr + (mem.DataSize + MEMALIGN1) & ~MEMALIGN1;
 	}
 	writePortableExecutable(
-	    bufImport, bufExport, (BYTE *)caText, offCode, (BYTE *)caData, ix.ixData);
+	    bufImport, bufExport, (uint8_t *)caText, offCode, (uint8_t *)caData, ix.ixData);
 	free(exe.cnt);
 	free(exe.locs);
 	free(caData);

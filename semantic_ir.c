@@ -14,6 +14,8 @@ static IrType valueType(const VALUE *value)
 
 int semanticIrActive(void)
 {
+	irBuilderSetSource(
+	    &compiler.irBuilder, cd.token[ix.tix].filenumber, cd.token[ix.tix].linenumber);
 	return compiler.irBuilder.function != NULL && compiler.irBuilder.suspensionDepth == 0;
 }
 
@@ -403,7 +405,23 @@ void semanticIrBinary(int operation, VALUE *left, VALUE *right)
 			}
 			else
 			{
-				result = emitArithmetic(assignmentOperation, &stored, right, stored.type);
+				int promotedType = assignmentOperation == FRONTEND_OP_SHIFT_LEFT ||
+				                           assignmentOperation == FRONTEND_OP_SHIFT_RIGHT
+				                       ? integerPromotion(stored.type)
+				                       : arithmeticType(stored.type, right->type);
+				result = emitArithmetic(assignmentOperation, &stored, right, promotedType);
+				if (canonicalType(left->type) == ID.T_BOOL)
+				{
+					VALUE truth;
+					setValue(VAL, 0, promotedType, &truth);
+					truth.irValue = result;
+					result = semanticIrCondition(&truth);
+					result = convertValue(result, intType(), targetType);
+				}
+				else
+				{
+					result = convertValue(result, irTypeForCObject(promotedType, 0), targetType);
+				}
 			}
 			if (canonicalType(left->type) == ID.T_BOOL && left->ptrs == 0)
 			{
@@ -435,9 +453,9 @@ void semanticIrBinary(int operation, VALUE *left, VALUE *right)
 			                       cmd.target->dataLayout.pointerAlignment);
 			unsignedComparison = TRUE;
 		}
-		else if (left->type == ID.T_DOUBLE || right->type == ID.T_DOUBLE)
+		else if (isFloatingType(left->type) || isFloatingType(right->type))
 		{
-			common = irTypeForCObject(ID.T_DOUBLE, 0);
+			common = irTypeForCObject(arithmeticType(left->type, right->type), 0);
 			unsignedComparison = FALSE;
 		}
 		else
@@ -480,9 +498,22 @@ void semanticIrBinary(int operation, VALUE *left, VALUE *right)
 		return;
 	}
 
-	resultType = left->type == ID.T_DOUBLE || right->type == ID.T_DOUBLE
-	                 ? ID.T_DOUBLE
-	                 : usualIntegerType(left->type, right->type);
+	if (left->ptrs == 0 && right->ptrs > 0 && operation == '+')
+	{
+		left->irValue = irBuilderEmitPointerOffset(&compiler.irBuilder,
+		                                           IR_OP_POINTER_ADD,
+		                                           valueType(right),
+		                                           requireValue(right),
+		                                           requireValue(left),
+		                                           sizeOfObjectType(right->type, right->ptrs - 1));
+		left->irAddress = IR_VALUE_NONE;
+		return;
+	}
+	resultType = arithmeticType(left->type, right->type);
+	if (operation == FRONTEND_OP_SHIFT_LEFT || operation == FRONTEND_OP_SHIFT_RIGHT)
+	{
+		resultType = integerPromotion(left->type);
+	}
 	left->irValue = emitArithmetic(operation, left, right, resultType);
 	left->irAddress = IR_VALUE_NONE;
 }
@@ -491,13 +522,23 @@ void semanticIrUnary(int operation, VALUE *value)
 {
 	IrValueId operand;
 	IrType type;
-	if (!semanticIrActive() || operation == '+')
+	if (!semanticIrActive())
 	{
 		return;
 	}
 	operand = requireValue(value);
 	type = valueType(value);
-	if (operation == '-')
+	if (operation != '!' && isIntegerType(value->type) && value->ptrs == 0)
+	{
+		IrType promoted = irTypeForCObject(integerPromotion(value->type), 0);
+		operand = convertValue(operand, type, promoted);
+		type = promoted;
+	}
+	if (operation == '+')
+	{
+		value->irValue = operand;
+	}
+	else if (operation == '-')
 	{
 		value->irValue = irBuilderEmitUnary(&compiler.irBuilder, IR_OP_NEGATE, type, operand);
 	}
@@ -585,7 +626,12 @@ IrValueId semanticIrArgument(VALUE *value, int targetType, int targetPointers)
 	argument = requireValue(value);
 	if (targetType == ID.DOTS3)
 	{
-		return argument;
+		target =
+		    value->ptrs > 0
+		        ? valueType(value)
+		        : irTypeForCObject(
+		              isFloatingType(value->type) ? ID.T_DOUBLE : integerPromotion(value->type), 0);
+		return convertValue(argument, valueType(value), target);
 	}
 	target = irTypeForCObject(targetType, targetPointers);
 	return convertValue(argument, valueType(value), target);
@@ -600,7 +646,10 @@ void semanticIrCast(VALUE *value, int targetType, int targetPointers)
 	}
 	if (canonicalType(targetType) == ID.T_VOID && targetPointers == 0)
 	{
-		(void)requireValue(value);
+		if (value->type != ID.T_VOID || value->ptrs > 0)
+		{
+			(void)requireValue(value);
+		}
 		value->irValue = IR_VALUE_NONE;
 		value->irAddress = IR_VALUE_NONE;
 		return;
@@ -608,6 +657,7 @@ void semanticIrCast(VALUE *value, int targetType, int targetPointers)
 	if (canonicalType(targetType) == ID.T_BOOL && targetPointers == 0)
 	{
 		value->irValue = semanticIrCondition(value);
+		value->irValue = convertValue(value->irValue, intType(), irTypeForCObject(ID.T_BOOL, 0));
 		value->irAddress = IR_VALUE_NONE;
 		return;
 	}

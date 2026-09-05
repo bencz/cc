@@ -1,5 +1,6 @@
 /* Linux host services. */
 
+#define _POSIX_C_SOURCE 200809L
 #include "cc_platform.h"
 
 #include <glob.h>

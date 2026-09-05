@@ -26,7 +26,7 @@ static void printUsage(void)
 	       "Usage: cc [options] file...\n"
 	       "Options:\n"
 	       "  -D<macro>[=value]       Define a preprocessor macro\n"
-	       "  --target=<target>       x86-pe or zos-hlasm\n"
+	       "  --target=<target>       x86-pe, zos-hlasm, ppc32-linux, ppc32-aix\n"
 	       "  -shared                 Generate a DLL file (Windows only)\n"
 	       "  -o <file>               Set the output file name\n"
 	       "  --emit-ir=<file>        Write the verified target-neutral IR\n"
@@ -34,7 +34,7 @@ static void printUsage(void)
 	       "  -L<directory>           Add a PE import-library search directory\n"
 	       "  --pe-sysroot=<dir>      Set the root used to find PE DLLs or DEF files\n"
 	       "  -hlasm                  Alias for --target=zos-hlasm\n"
-	       "  -S                      Emit target assembly (z/OS HLASM target)\n"
+	       "  -S                      Emit target assembly (HLASM or PowerPC)\n"
 	       "  --exec-charset=<name>   ibm-1047 or ibm-037\n"
 	       "  --zos-jcl=<file>        Write a self-contained assemble/bind/run JCL job\n"
 	       "  -Werror                 Treat source warnings as errors\n"
@@ -214,10 +214,7 @@ static int parseCommandLine(int argc, char *argv[])
 		}
 		else if (strncmp(argument, "--pe-sysroot=", 13) == 0)
 		{
-			copyOption(cmd.peSysroot,
-			           sizeof(cmd.peSysroot),
-			           argument + 13,
-			           "--pe-sysroot");
+			copyOption(cmd.peSysroot, sizeof(cmd.peSysroot), argument + 13, "--pe-sysroot");
 		}
 		else if (strcmp(argument, "-o") == 0)
 		{
@@ -282,7 +279,7 @@ static void validateCommandLine(int emitAssembly)
 	}
 	if (emitAssembly && !cmd.target->supportsAssemblyOutput)
 	{
-		error("main", "-S currently requires --target=zos-hlasm");
+		error("main", "target '%s' does not support assembly output", cmd.target->name);
 	}
 	if (cmd.jclfile[0] != '\0' && !cmd.target->supportsJclOutput)
 	{
@@ -291,7 +288,9 @@ static void validateCommandLine(int emitAssembly)
 	if (cmd.target->requiresSingleTranslationUnit && cmd.nSrc != 1)
 	{
 		error("main",
-		      "z/OS emits one translation unit per invocation; provide exactly one source file");
+		      "target '%s' emits one translation unit per invocation; provide exactly one source "
+		      "file",
+		      cmd.target->name);
 	}
 	if ((opt & oDLL) && !cmd.target->supportsSharedOutput)
 	{

@@ -10,6 +10,7 @@ file(COPY "${SOURCE_DIR}/include" DESTINATION "${stage2_directory}")
 set(compiler_sources
     main.c util.c prepro.c prepro_expr.c lexer.c codegen.c ir.c semantic_ir.c parser.c expr.c
     host_windows.c target.c target_x86_pe.c target_zos_hlasm.c
+    target_ppc.c abi_ppc.c backend_ppc.c
     pe_exports.c backend_x86_ir.c backend_x86.c backend_hlasm.c zos_jcl.c
 )
 set(source_paths)
@@ -66,3 +67,24 @@ file(READ "${stage3_assembly}" hlasm_text)
 if(NOT hlasm_text MATCHES "CEEENTRY")
     message(FATAL_ERROR "stage-3 HLASM output does not contain an LE entry prolog")
 endif()
+
+foreach(fixture test_review_regressions test_varargs test_small_aggregates test_stdcall test_backend_edges)
+    execute_process(COMMAND "${stage3_compiler}" --target=x86-pe
+        "${SOURCE_DIR}/tests/${fixture}.c" -o "${stage2_directory}/${fixture}.exe"
+        RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE errors)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "Stage-3 regression compilation failed: ${output}${errors}")
+    endif()
+    execute_process(COMMAND "${stage2_directory}/${fixture}.exe" RESULT_VARIABLE result TIMEOUT 20)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "Stage-3 regression ${fixture} returned ${result}")
+    endif()
+    foreach(target ppc32-linux ppc32-aix)
+        execute_process(COMMAND "${stage3_compiler}" "--target=${target}"
+            "${SOURCE_DIR}/tests/${fixture}.c" -o "${stage2_directory}/${target}_${fixture}.s"
+            RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE errors)
+        if(NOT result EQUAL 0)
+            message(FATAL_ERROR "Stage-3 ${target} lowering failed: ${output}${errors}")
+        endif()
+    endforeach()
+endforeach()

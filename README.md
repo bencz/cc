@@ -1,21 +1,23 @@
 # CC
 
-CC is a compact C compiler with native code generation for 32-bit Windows and an HLASM backend for IBM z/OS. The project favors predictable compilation, explicit diagnostics, and small, auditable implementation layers over broad but incomplete language coverage.
+CC is a compact, self-hosting C compiler with independent backends for Windows x86, IBM z/OS, and big-endian PowerPC32. Its focus is a readable implementation, explicit ABI contracts, and predictable diagnostics.
 
-The compiler is actively validated through native execution, cross-backend output checks, sanitizers, and static analysis. Source warnings are errors by default, and an unsupported construct must stop compilation instead of producing partial code.
+C expressions and control flow are lowered to a shared typed IR. Target descriptors select the data model and output services; the two PowerPC ABIs share instruction selection and use separate linkage policies. Source warnings are errors by default, and host builds also treat warnings as errors.
 
-## Highlights
+## Targets
 
-- Emits PE32 executables and DLLs for 32-bit Windows.
-- Emits HLASM 1.6 source for z/OS 2.5 using AMODE 31, RMODE ANY, and the non-XPLINK Language Environment convention.
-- Uses an architecture-neutral typed control-flow IR shared by independent target backends.
-- Supports separate translation units and external symbol resolution.
-- Includes object-like, function-like, and variadic macros; `#`, `##`, conditional directives, logical lines, and short-circuit preprocessor expressions.
-- Treats compiler warnings as errors throughout the host build.
+| Target | Output | Calling convention |
+| --- | --- | --- |
+| `x86-pe` | PE32 executable or DLL | Windows x86 cdecl / stdcall |
+| `zos-hlasm` | HLASM source | z/OS AMODE 31, LE non-XPLINK C |
+| `ppc32-linux` | GNU-style assembly for ELF32 | Linux PowerPC System V, big-endian |
+| `ppc32-aix` | AIX assembly for XCOFF32 | AIX linkage, TOC and function descriptors |
+
+The Windows backend writes the image directly. PowerPC and z/OS output must be assembled and linked with the target toolchain; CC does not write ELF, XCOFF, or GOFF object files directly.
 
 ## Build and test
 
-Use an x86 Developer PowerShell for Visual Studio on Windows:
+In an x86 Visual Studio developer shell:
 
 ```powershell
 cmake --preset windows-x86-debug
@@ -23,7 +25,7 @@ cmake --build --preset windows-x86-debug
 ctest --preset windows-x86-debug -j 4
 ```
 
-On Linux, macOS, or another environment with Ninja available:
+On Linux or macOS, with a C99 compiler and Ninja:
 
 ```sh
 cmake --preset portable-debug
@@ -31,70 +33,52 @@ cmake --build --preset portable-debug
 ctest --preset portable-debug
 ```
 
-Configure with `CC_ENABLE_SANITIZERS=ON` to enable AddressSanitizer. GNU and Clang toolchains also enable UndefinedBehaviorSanitizer.
+Configure with `-DCC_ENABLE_SANITIZERS=ON` to enable AddressSanitizer; GNU and Clang builds also enable UndefinedBehaviorSanitizer. PowerPC assembly checks use `llvm-mc` and `llvm-readobj` when available. Optional execution and ABI interoperability tests additionally use `ld.lld`, Clang, and `qemu-ppc`; see [PowerPC validation](docs/ppc-validation.md).
 
 ## Usage
 
 ```text
-cc [options] source.c
-
---target=x86-pe             Generate a 32-bit Windows PE image
---target=zos-hlasm          Generate HLASM source for z/OS
--hlasm                     Alias for --target=zos-hlasm
--S                         Emit assembly for the HLASM target
--o file                    Select the output file
--Dname[=value]             Define a preprocessor macro
--Werror                    Treat source warnings as errors (the default)
--Wno-error                 Report source warnings without stopping compilation
---exec-charset=ibm-1047    Use IBM-1047 as the z/OS execution character set
---exec-charset=ibm-037     Use IBM-037 as the z/OS execution character set
---zos-jcl=file.jcl         Generate an assemble, bind, and run job
+cc --target=x86-pe program.c -o program.exe
+cc --target=zos-hlasm -S program.c -o program.asm --zos-jcl=program.jcl
+cc --target=ppc32-linux -S program.c -o program-linux.s
+cc --target=ppc32-aix -S program.c -o program-aix.s
 ```
 
-For example:
+The default target is `x86-pe`. Useful options include `-Dname[=value]`, `-o file`, `-shared` for Windows DLLs, and `--emit-ir=file` for IR inspection. `-Werror` is the default; `-Wno-error` explicitly relaxes source warnings.
 
-```powershell
-cc --target=zos-hlasm -S hello.c -o hello.asm --zos-jcl=hello.jcl
-```
+Each PowerPC or z/OS invocation accepts one translation unit. Compile each source separately, then combine its object with the other objects and runtime libraries using the target linker. Windows can compile multiple source files into one image.
 
-Each z/OS invocation compiles exactly one translation unit. Compile every `.c` file separately and pass the resulting objects to the binder. The generated self-contained JCL is intended to validate one translation unit containing `main`; it uses `CEE.SCEEMAC`, `CEE.SCEELKED`, and GOFF, and prevents bind or execution steps from running after a nonzero return code.
+## Windows and self-hosting
 
-## Windows x86 target
+The x86 backend supports imports, exports, base relocations, static data, integer operations, and binary32/binary64 floating point. The DLL regression test loads an image away from its preferred base and calls an exported stdcall function.
 
-The native backend writes PE32 images directly and does not depend on a system assembler or linker. It supports executables, DLL imports and exports, relocations, static data, and floating-point operations.
+The bootstrap builds a stage-2 compiler, uses stage 2 to compile the complete compiler into stage 3, then exercises stage 3 with executable regression cases and output from the HLASM and both PowerPC targets. Self-hosting currently refers to Windows x86; it is not a claim of a native AIX or z/OS bootstrap.
 
-CC is self-hosting on the Windows x86 target. The bootstrap test builds a stage-2 compiler, uses it to recompile the complete compiler as stage 3, then uses stage 3 to compile and run an x86 program and generate z/OS HLASM. Target selection uses function-pointer descriptors, while both backends consume the same typed CFG IR and symbolic global relocations.
+## PowerPC32
 
-## z/OS HLASM target
+Both targets use a big-endian ILP32 data model and hardware floating point. The backend handles scalar operations, memory access, branches, direct and indirect calls, static initializers, symbolic relocations, and explicit variadic IR operations.
 
-The z/OS backend follows a defined ABI and storage model:
+Linux uses independent integer and floating-point argument registers and its register-save/overflow-area `va_list`. AIX uses its parameter word image, 24-byte linkage area, TOC preservation, and three-word function descriptors. AIX POWER aggregate alignment is selected through the target data-layout policy.
 
-- `CEEENTRY`, `CEETERM`, `CEEPPA`, `CEEDSA`, and `CEECAA` provide the Language Environment entry and exit contract.
-- Each function has its own DSA for automatic objects, typed IR values, BFP temporaries, and argument lists. R13 remains the DSA register and is never repurposed as an expression stack.
-- Instructions are emitted in an `RSECT`; writable C objects are emitted in the `CCDATA CSECT`.
-- Non-XPLINK calls pass a list of argument pointers in R1 and set the VL bit on the final entry.
-- Integer values return in R15 and `double` values return in F0.
-- The `PLIST(HOST)` entry is converted to `argc` and `argv`, including quoted arguments and the required `argv[argc] == NULL` terminator.
-- Long relative branches and immediate materialization do not rely on a single literal pool with a 4 KiB reach.
-- Character and string literals are converted to IBM-1047 or IBM-037, while numeric escapes retain their explicit values. Numeric data is emitted in big-endian order.
-- C external names are preserved with `ALIAS`; generated HLASM symbols remain within the eight-character limit.
-- An IR opcode without a valid lowering is a compilation error. The backend never emits placeholder assembly.
+Linux assembly is assembled to ELF32 and executed under QEMU in the optional test suite. Tests also link CC-generated code with Clang-generated code to exercise calls in both directions. AIX assembly has structural checks, but native assembly, binding, and execution remain required acceptance gates.
 
-Generated modules are linked as `NORENT` because writable C globals have static storage duration and remain in the load module. Function code and automatic storage are reentrant, and executable sections are read-only. Declaring the complete module `RENT` without moving writable globals to WSA would be incorrect.
+## z/OS
 
-## Language support
+The HLASM backend consumes the same IR directly; it does not translate x86 instructions. It uses LE entry/exit macros, per-function automatic storage, long relative branches, materialized stack addresses, and exact IEEE floating-point constants.
 
-The frontend supports `_Bool`; signed and unsigned `char`, `short`, `int`, and `long` in the ILP32 model; `float`; `double`; pointers; function pointers; arrays; functions; `struct`; `union`; and `enum`. Both backends preserve integer promotions, signed and unsigned comparisons, division, remainder, shifts, and conversions.
+Non-XPLINK C calls use a word-oriented argument area addressed by R1. Integer and pointer results use R15; floating-point and supported aggregate results use caller-provided storage through a hidden argument. This is not the OS-linkage list-of-pointers convention.
 
-Scalar and pointer typedefs, first-level designated initializers, and zero initialization of omitted members are supported. The regression suite also covers declarations in `for` initializers, unnamed prototype parameters, `stdarg`, chained casts, unevaluated `sizeof` operands, and `<<=` and `>>=`.
+Generated C literals use IBM-1047 by default, or IBM-037 with `--exec-charset=ibm-037`. Numeric escapes keep their specified byte values. Plain `char` is unsigned on z/OS and PowerPC, and signed on Windows x86.
 
-The current IR and grammar intentionally do not implement `long long`, bit-fields, chained designators, compound literals, or variable-length arrays. These constructs produce diagnostics instead of incomplete output.
+A translation unit containing `main` also produces `program.asm.runtime.c`: a small, complete IEEE-mode initializer compiled with the IBM C compiler and its headers. The generated JCL includes this compilation step before binding. Library-only units rely on the caller's compatible LE/BFP environment.
 
-## Validation
+Modules with writable globals are bound as `NORENT`. Mainframe acceptance requires an actual IBM HLASM listing, binder map, and execution; local text checks do not establish those results. See [z/OS validation](docs/zos-validation.md).
 
-The test suite executes programs produced by the x86 backend, checks their exit codes, bootstraps the compiler, and validates every generated HLASM and JCL artifact structurally. The project is also built with strict host warnings, AddressSanitizer, and MSVC static analysis.
+## Language scope
 
-Final acceptance of z/OS output requires a real HLASM listing and binder result. The mainframe procedure and expected checks are described in [docs/zos-validation.md](docs/zos-validation.md).
+The frontend supports ILP32 integer types, `_Bool`, `float`, `double`, pointers, function pointers, arrays, functions, structures, unions, enums, typedefs, designated initializers, and variadic functions. The preprocessor includes function-like and variadic macros, stringification, token pasting, conditional directives, and short-circuit expressions.
+
+Aggregate objects can be larger than a machine word and accessed through pointers. Aggregate values passed or returned by value are currently limited to objects of 1, 2, or 4 bytes. The compiler does not yet support `long long`, bit-fields, variable-length arrays, compound literals, or chained designators. PowerPC output is non-PIC; shared-library generation and PPC64 are outside the current target contract.
 
 ## License
 

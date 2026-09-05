@@ -9,13 +9,15 @@ const TargetDescriptor *targetDefault(void)
 
 const TargetDescriptor *targetFind(const char *name)
 {
-	if (strcmp(name, targetX86Pe.name) == 0)
+	const TargetDescriptor *targets[] = {
+	    &targetX86Pe, &targetZosHlasm, &targetPpcLinux, &targetPpcAix};
+	size_t index;
+	for (index = 0; index < sizeof(targets) / sizeof(targets[0]); ++index)
 	{
-		return &targetX86Pe;
-	}
-	if (strcmp(name, targetZosHlasm.name) == 0)
-	{
-		return &targetZosHlasm;
+		if (strcmp(name, targets[index]->name) == 0)
+		{
+			return targets[index];
+		}
 	}
 	return NULL;
 }

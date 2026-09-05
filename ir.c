@@ -42,6 +42,10 @@ static int usesLeft(IrOpcode opcode)
 	case IR_OP_COMPARE:
 	case IR_OP_CONVERT:
 	case IR_OP_CALL_INDIRECT:
+	case IR_OP_VA_START:
+	case IR_OP_VA_ARGUMENT:
+	case IR_OP_VA_COPY:
+	case IR_OP_VA_END:
 	case IR_OP_BRANCH_CONDITIONAL:
 	case IR_OP_RETURN:
 		return 1;
@@ -55,6 +59,7 @@ static int usesRight(IrOpcode opcode)
 	switch (opcode)
 	{
 	case IR_OP_STORE:
+	case IR_OP_VA_COPY:
 	case IR_OP_ADD:
 	case IR_OP_SUBTRACT:
 	case IR_OP_MULTIPLY:
@@ -126,6 +131,10 @@ static const char *opcodeName(IrOpcode opcode)
 	    "convert",
 	    "call",
 	    "call_indirect",
+	    "va_start",
+	    "va_arg",
+	    "va_copy",
+	    "va_end",
 	    "branch",
 	    "branch_if",
 	    "return",
@@ -646,7 +655,8 @@ IrValueId irBuilderEmitUndefined(IrBuilder *builder, IrType type)
 IrValueId irBuilderEmitInteger(IrBuilder *builder, IrType type, uint32_t value)
 {
 	IrInstruction *instruction;
-	if (type.kind != IR_TYPE_INTEGER && type.kind != IR_TYPE_POINTER)
+	if (type.kind != IR_TYPE_INTEGER && type.kind != IR_TYPE_POINTER &&
+	    !(type.kind == IR_TYPE_AGGREGATE && value == 0U))
 	{
 		error("IR builder", "integer constant has a non-integral type");
 	}
@@ -842,6 +852,15 @@ IrValueId irBuilderEmitCallIndirect(IrBuilder *builder,
 		return IR_VALUE_NONE;
 	}
 	return finishValue(builder, instruction);
+}
+
+IrValueId irBuilderEmitVariadic(
+    IrBuilder *builder, IrOpcode opcode, IrType type, IrValueId address, IrValueId source)
+{
+	IrInstruction *instruction = appendBuiltInstruction(builder, opcode, type);
+	instruction->left = address;
+	instruction->right = source;
+	return type.kind == IR_TYPE_VOID ? IR_VALUE_NONE : finishValue(builder, instruction);
 }
 
 void irBuilderEmitBranch(IrBuilder *builder, IrBlockId destination)
@@ -1042,6 +1061,213 @@ static unsigned char *computeDominators(const IrFunction *function)
 	return dominators;
 }
 
+IrType *irCollectValueTypes(const IrFunction *function)
+{
+	IrType *types;
+	int blockIndex;
+	if (function->nextValue < 0)
+	{
+		error("IR", "negative value count");
+	}
+	types = xalloc(((size_t)function->nextValue + 1U) * sizeof(*types));
+	for (blockIndex = 0; blockIndex < function->blockCount; ++blockIndex)
+	{
+		const IrBasicBlock *block = &function->blocks[blockIndex];
+		int index;
+		for (index = 0; index < block->instructionCount; ++index)
+		{
+			const IrInstruction *instruction = &block->instructions[index];
+			if (instruction->result != IR_VALUE_NONE)
+			{
+				if (instruction->result < 0 || instruction->result >= function->nextValue)
+				{
+					error("IR", "result outside the value table");
+				}
+				types[instruction->result] = instruction->type;
+			}
+		}
+	}
+	return types;
+}
+
+static void verifyType(IrType type)
+{
+	int valid = type.kind == IR_TYPE_VOID ? type.bits == 0U
+	            : (type.kind == IR_TYPE_INTEGER || type.kind == IR_TYPE_AGGREGATE)
+	                ? (type.bits == 8U || type.bits == 16U || type.bits == 32U)
+	            : type.kind == IR_TYPE_POINTER ? type.bits == 32U
+	            : type.kind == IR_TYPE_FLOAT   ? (type.bits == 32U || type.bits == 64U)
+	                                           : 0;
+	if (!valid || (type.kind != IR_TYPE_VOID &&
+	               (type.alignment == 0U || (type.alignment & (type.alignment - 1U)) != 0U)))
+	{
+		error("IR verifier",
+		      "invalid type kind %u, width %u, alignment %u",
+		      type.kind,
+		      type.bits,
+		      type.alignment);
+	}
+}
+
+static void requireSameType(IrType expected,
+                            IrType actual,
+                            const IrInstruction *instruction,
+                            const IrFunction *function)
+{
+	if (!irTypesEqual(expected, actual))
+	{
+		error("IR verifier",
+		      "%s type mismatch in function %d at %s:%d (value %d; expected %u/%u/%u, actual "
+		      "%u/%u/%u)",
+		      opcodeName(instruction->opcode),
+		      function->symbol,
+		      instruction->sourceFile >= 0 ? mcc.srcFile[instruction->sourceFile] : "IR",
+		      instruction->sourceLine,
+		      instruction->result,
+		      expected.kind,
+		      expected.bits,
+		      expected.isUnsigned,
+		      actual.kind,
+		      actual.bits,
+		      actual.isUnsigned);
+	}
+}
+
+static void verifyInstructionTypes(const IrFunction *function,
+                                   const IrInstruction *instruction,
+                                   const IrType *types)
+{
+	IrType left = instruction->left == IR_VALUE_NONE ? irTypeVoid() : types[instruction->left];
+	IrType right = instruction->right == IR_VALUE_NONE ? irTypeVoid() : types[instruction->right];
+	IrType result = instruction->type;
+	IrOpcode opcode = instruction->opcode;
+	verifyType(result);
+	if (opcode == IR_OP_PARAMETER)
+	{
+		if (instruction->offset < 0 || instruction->offset >= function->parameterCount)
+		{
+			error("IR verifier", "parameter index outside the function signature");
+		}
+		requireSameType(
+		    function->parameterTypes[instruction->offset], result, instruction, function);
+	}
+	else if (opcode == IR_OP_CONSTANT_FLOAT)
+	{
+		if (result.kind != IR_TYPE_FLOAT)
+		{
+			error("IR verifier", "floating constant has a non-floating type");
+		}
+	}
+	else if (opcode == IR_OP_CONSTANT_INTEGER)
+	{
+		if (result.kind != IR_TYPE_INTEGER && result.kind != IR_TYPE_POINTER &&
+		    !(result.kind == IR_TYPE_AGGREGATE && instruction->integer == 0U))
+		{
+			error("IR verifier", "integer constant has an invalid type");
+		}
+	}
+	else if (opcode == IR_OP_ADDRESS_OF || opcode == IR_OP_LOCAL_ADDRESS)
+	{
+		if (result.kind != IR_TYPE_POINTER)
+		{
+			error("IR verifier", "address operation must produce a pointer");
+		}
+	}
+	else if (opcode == IR_OP_LOAD || opcode == IR_OP_STORE || opcode == IR_OP_ZERO_MEMORY)
+	{
+		if (left.kind != IR_TYPE_POINTER)
+		{
+			error("IR verifier", "memory access requires a pointer");
+		}
+		if (opcode == IR_OP_STORE)
+		{
+			requireSameType(result, right, instruction, function);
+		}
+		if (opcode == IR_OP_ZERO_MEMORY && instruction->offset < 0)
+		{
+			error("IR verifier", "negative memory extent");
+		}
+	}
+	else if (opcode == IR_OP_COPY || opcode == IR_OP_NEGATE || opcode == IR_OP_BITWISE_NOT)
+	{
+		requireSameType(result, left, instruction, function);
+		if (opcode == IR_OP_BITWISE_NOT && result.kind != IR_TYPE_INTEGER)
+		{
+			error("IR verifier", "bitwise operation requires integers");
+		}
+	}
+	else if (opcode >= IR_OP_ADD && opcode <= IR_OP_SHIFT_RIGHT_UNSIGNED)
+	{
+		requireSameType(result, left, instruction, function);
+		requireSameType(result, right, instruction, function);
+		if (result.kind != IR_TYPE_INTEGER &&
+		    !(result.kind == IR_TYPE_FLOAT && opcode >= IR_OP_ADD && opcode <= IR_OP_DIVIDE_SIGNED))
+		{
+			error("IR verifier", "invalid arithmetic type");
+		}
+	}
+	else if (opcode >= IR_OP_POINTER_ADD && opcode <= IR_OP_POINTER_DIFFERENCE)
+	{
+		int difference = opcode == IR_OP_POINTER_DIFFERENCE;
+		if (left.kind != IR_TYPE_POINTER ||
+		    right.kind != (difference ? IR_TYPE_POINTER : IR_TYPE_INTEGER) ||
+		    result.kind != (difference ? IR_TYPE_INTEGER : IR_TYPE_POINTER) ||
+		    instruction->offset <= 0)
+		{
+			error("IR verifier", "invalid pointer arithmetic");
+		}
+	}
+	else if (opcode == IR_OP_COMPARE)
+	{
+		requireSameType(left, right, instruction, function);
+		if (left.kind == IR_TYPE_VOID || result.kind != IR_TYPE_INTEGER || result.bits != 32U ||
+		    instruction->condition < IR_COMPARE_EQUAL ||
+		    instruction->condition > IR_COMPARE_GREATER_EQUAL_UNSIGNED)
+		{
+			error("IR verifier", "invalid comparison");
+		}
+	}
+	else if (opcode == IR_OP_CONVERT)
+	{
+		if (left.kind == IR_TYPE_VOID || result.kind == IR_TYPE_VOID)
+		{
+			error("IR verifier", "conversion requires scalar values");
+		}
+	}
+	else if (opcode == IR_OP_BRANCH_CONDITIONAL && left.kind != IR_TYPE_INTEGER)
+	{
+		error("IR verifier", "branch condition must be integral");
+	}
+	else if (opcode == IR_OP_RETURN)
+	{
+		requireSameType(function->returnType, result, instruction, function);
+		if (result.kind != IR_TYPE_VOID)
+		{
+			requireSameType(result, left, instruction, function);
+		}
+	}
+	else if (opcode == IR_OP_CALL_INDIRECT && left.kind != IR_TYPE_POINTER)
+	{
+		error("IR verifier", "indirect call requires a function pointer");
+	}
+	else if (opcode >= IR_OP_VA_START && opcode <= IR_OP_VA_END)
+	{
+		if (left.kind != IR_TYPE_POINTER ||
+		    (opcode == IR_OP_VA_COPY && right.kind != IR_TYPE_POINTER))
+		{
+			error("IR verifier", "variadic state must be addressed by a pointer");
+		}
+		if (opcode == IR_OP_VA_START && !function->isVariadic)
+		{
+			error("IR verifier", "va_start outside a variadic function");
+		}
+		if ((opcode == IR_OP_VA_ARGUMENT) == (result.kind == IR_TYPE_VOID))
+		{
+			error("IR verifier", "invalid variadic result type");
+		}
+	}
+}
+
 static void verifyFunction(const IrFunction *function)
 {
 	unsigned char *definitions;
@@ -1049,6 +1275,16 @@ static void verifyFunction(const IrFunction *function)
 	int *definitionInstructions;
 	unsigned char *dominators;
 	int blockIndex;
+	IrType *valueTypes;
+	if (function->blockCount <= 0 || function->blockCount > function->blockCapacity ||
+	    function->blocks == NULL || function->nextValue < 0 || function->parameterCount < 0 ||
+	    (function->parameterCount > 0 && function->parameterTypes == NULL) ||
+	    function->localCount < 0 || function->localCount > function->localCapacity ||
+	    (function->localCount > 0 && function->locals == NULL))
+	{
+		error("IR verifier", "invalid function storage or counts");
+	}
+	verifyType(function->returnType);
 	if (function->blockCount == 0)
 	{
 		error("IR verifier", "function %d has no basic blocks", function->symbol);
@@ -1062,7 +1298,12 @@ static void verifyFunction(const IrFunction *function)
 	{
 		const IrBasicBlock *block = &function->blocks[blockIndex];
 		int instructionIndex;
-		if (block->instructionCount == 0 ||
+		if (block->id != blockIndex)
+		{
+			error("IR verifier", "non-canonical block identity");
+		}
+		if (block->instructionCount <= 0 || block->instructionCount > block->instructionCapacity ||
+		    block->instructions == NULL ||
 		    !isTerminator(block->instructions[block->instructionCount - 1].opcode))
 		{
 			free(definitions);
@@ -1072,6 +1313,25 @@ static void verifyFunction(const IrFunction *function)
 		{
 			const IrInstruction *instruction = &block->instructions[instructionIndex];
 			(void)opcodeName(instruction->opcode);
+			if ((instruction->left != IR_VALUE_NONE &&
+			     (instruction->left < 0 || instruction->left >= function->nextValue)) ||
+			    (instruction->right != IR_VALUE_NONE &&
+			     (instruction->right < 0 || instruction->right >= function->nextValue)) ||
+			    instruction->argumentCount < 0 ||
+			    (instruction->argumentCount > 0 && instruction->arguments == NULL))
+			{
+				error("IR verifier", "invalid instruction operands or argument storage");
+			}
+			if (isTerminator(instruction->opcode) &&
+			    instructionIndex + 1 != block->instructionCount)
+			{
+				error("IR verifier", "instructions follow a terminator");
+			}
+			if ((!producesValue(instruction->opcode) || instruction->type.kind == IR_TYPE_VOID) &&
+			    instruction->result != IR_VALUE_NONE)
+			{
+				error("IR verifier", "non-value instruction defines a result");
+			}
 			if (producesValue(instruction->opcode) && instruction->type.kind != IR_TYPE_VOID)
 			{
 				if (instruction->result < 0 || instruction->result >= function->nextValue ||
@@ -1103,6 +1363,7 @@ static void verifyFunction(const IrFunction *function)
 			}
 		}
 	}
+	valueTypes = irCollectValueTypes(function);
 	dominators = computeDominators(function);
 	for (blockIndex = 0; blockIndex < function->blockCount; ++blockIndex)
 	{
@@ -1159,8 +1420,10 @@ static void verifyFunction(const IrFunction *function)
 				error(
 				    "IR verifier", "local address references missing local %d", instruction->local);
 			}
+			verifyInstructionTypes(function, instruction, valueTypes);
 		}
 	}
+	free(valueTypes);
 	free(dominators);
 	free(definitionInstructions);
 	free(definitionBlocks);
@@ -1170,9 +1433,47 @@ static void verifyFunction(const IrFunction *function)
 void irVerifyModule(const IrModule *module)
 {
 	int functionIndex;
+	int globalIndex;
 	if (module == NULL)
 	{
 		error("IR verifier", "module is null");
+	}
+	if (module->functionCount < 0 || module->functionCount > module->functionCapacity ||
+	    (module->functionCount != 0 && module->functions == NULL) || module->globalCount < 0 ||
+	    module->globalCount > module->globalCapacity ||
+	    (module->globalCount != 0 && module->globals == NULL))
+	{
+		error("IR verifier", "invalid module storage or counts");
+	}
+	for (globalIndex = 0; globalIndex < module->globalCount; ++globalIndex)
+	{
+		const IrGlobal *global = &module->globals[globalIndex];
+		int relocationIndex;
+		if (global->alignment <= 0 || (global->alignment & (global->alignment - 1)) != 0 ||
+		    global->initializerSize > global->zeroFillSize ||
+		    (global->initializerSize != 0U && global->initializer == NULL) ||
+		    global->relocationCount < 0 || global->relocationCount > global->relocationCapacity ||
+		    (global->relocationCount != 0 && global->relocations == NULL))
+		{
+			error("IR verifier", "invalid global storage or alignment");
+		}
+		for (relocationIndex = 0; relocationIndex < global->relocationCount; ++relocationIndex)
+		{
+			size_t offset = global->relocations[relocationIndex].offset;
+			int previous;
+			if (offset > global->initializerSize || global->initializerSize - offset < 4U)
+			{
+				error("IR verifier", "global relocation exceeds initializer storage");
+			}
+			for (previous = 0; previous < relocationIndex; ++previous)
+			{
+				size_t other = global->relocations[previous].offset;
+				if (offset < other + 4U && other < offset + 4U)
+				{
+					error("IR verifier", "overlapping global relocations");
+				}
+			}
+		}
 	}
 	for (functionIndex = 0; functionIndex < module->functionCount; ++functionIndex)
 	{
@@ -1189,6 +1490,10 @@ static void dumpType(FILE *output, IrType type)
 	else if (type.kind == IR_TYPE_POINTER)
 	{
 		fprintf(output, "ptr%u", type.bits);
+	}
+	else if (type.kind == IR_TYPE_AGGREGATE)
+	{
+		fprintf(output, "aggregate%u", type.bits);
 	}
 	else
 	{

@@ -6,9 +6,13 @@
 #define SCHAR_MAX 127
 #define UCHAR_MAX 255U
 
-/* cc intentionally keeps plain char signed on both supported targets. */
+#ifdef __CHAR_UNSIGNED__
+#define CHAR_MIN 0
+#define CHAR_MAX UCHAR_MAX
+#else
 #define CHAR_MIN SCHAR_MIN
 #define CHAR_MAX SCHAR_MAX
+#endif
 
 #define SHRT_MIN (-32767 - 1)
 #define SHRT_MAX 32767

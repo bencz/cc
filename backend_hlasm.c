@@ -12,6 +12,7 @@ typedef struct _HLASM_FUNCTION
 {
 	int id;
 	int ordinal;
+	unsigned int blockBase;
 	int frameSize;
 	int maxStack;
 	int exported;
@@ -41,6 +42,7 @@ typedef struct _HLASM_STATE
 	int functionCount;
 	HLASM_FUNCTION *function;
 	unsigned int generatedLabel;
+	char unitName[24];
 } HLASM_STATE;
 
 static HLASM_STATE hs;
@@ -49,7 +51,7 @@ static HLASM_STATE hs;
  * positions; literals are emitted as hexadecimal bytes, independent of the
  * transfer encoding of the assembler source data set. */
 static const unsigned char ibm1047_ascii[128] = {
-    0x00, 0x01, 0x02, 0x03, 0x37, 0x2D, 0x2E, 0x2F, 0x16, 0x05, 0x25, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0x00, 0x01, 0x02, 0x03, 0x37, 0x2D, 0x2E, 0x2F, 0x16, 0x05, 0x15, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
     0x10, 0x11, 0x12, 0x13, 0x3C, 0x3D, 0x32, 0x26, 0x18, 0x19, 0x3F, 0x27, 0x1C, 0x1D, 0x1E, 0x1F,
     0x40, 0x5A, 0x7F, 0x7B, 0x5B, 0x6C, 0x50, 0x7D, 0x4D, 0x5D, 0x5C, 0x4E, 0x6B, 0x60, 0x4B, 0x61,
     0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0x7A, 0x5E, 0x4C, 0x7E, 0x6E, 0x6F,
@@ -102,7 +104,43 @@ static void emit_op(const char *label, const char *operation, const char *format
 			error("hlasm.emit", "assembler operand formatting overflow");
 		}
 	}
-	emit("%-8s %-8s %s", label != NULL ? label : "", operation, operand);
+	/* Operand continuation uses column 72 and resumes in column 16. */
+	if (strlen(operand) > HLASM_LINE_LIMIT - 18U)
+	{
+		size_t offset = HLASM_LINE_LIMIT - 18U;
+		if (fprintf(hs.output,
+		            "%-8s %-8s %.*sX\n",
+		            label != NULL ? label : "",
+		            operation,
+		            (int)offset,
+		            operand) < 0)
+		{
+			error("hlasm.emit", "write error");
+		}
+		while (strlen(operand + offset) > HLASM_LINE_LIMIT - 15U)
+		{
+			if (fprintf(
+			        hs.output, "%15s%.*sX\n", "", (int)(HLASM_LINE_LIMIT - 15U), operand + offset) <
+			    0)
+			{
+				error("hlasm.emit", "write error");
+			}
+			offset += HLASM_LINE_LIMIT - 15U;
+		}
+		emit("%15s%s", "", operand + offset);
+		return;
+	}
+	/* RIL branches cover large generated functions without branch relaxation. */
+	if (operation[0] == 'J')
+	{
+		char longBranch[12];
+		(void)snprintf(longBranch, sizeof(longBranch), "JL%s", operation + 1);
+		emit("%-8s %-8s %s", label != NULL ? label : "", longBranch, operand);
+	}
+	else
+	{
+		emit("%-8s %-8s %s", label != NULL ? label : "", operation, operand);
+	}
 }
 
 static void emit_alias(const char *symbol, const char *externalName)
@@ -150,7 +188,11 @@ static const char *source_name(int id)
 
 static void make_name(char output[9], char prefix, unsigned int value)
 {
-	(void)snprintf(output, 9U, "%c%06X", prefix, value & 0xFFFFFFU);
+	if (value > 0xFFFFFFU)
+	{
+		error("hlasm", "assembler symbol space exhausted");
+	}
+	(void)snprintf(output, 9U, "%c%06X", prefix, value);
 }
 
 static void symbol_name(char output[9], int id)
@@ -172,8 +214,7 @@ static void ir_symbol_name(char output[9], IrSymbolId symbol)
 
 static void location_name(char output[9], int location)
 {
-	unsigned int functionPart = hs.function != NULL ? (unsigned int)hs.function->ordinal : 0U;
-	make_name(output, 'L', (functionPart * 4099U) ^ (unsigned int)location);
+	make_name(output, 'L', hs.function->blockBase + (unsigned int)location);
 }
 
 static void generated_name(char output[9])
@@ -228,7 +269,7 @@ static int ir_type_size(IrType type)
 static int align_up(int value, int alignment)
 {
 	int remainder;
-	if (alignment <= 0)
+	if (alignment <= 0 || value < 0 || value > INT_MAX - alignment)
 	{
 		error("hlasm IR", "invalid alignment %d", alignment);
 	}
@@ -241,7 +282,7 @@ static void initialize_function_names(HLASM_FUNCTION *function, int ordinal, int
 	function->id = symbol;
 	function->ordinal = ordinal;
 	function->isMain = symbol >= 0 && strcmp(source_name(symbol), "_main") == 0;
-	make_name(function->entry, 'F', (unsigned int)symbol);
+	ir_symbol_name(function->entry, symbol);
 	make_name(function->ppa, 'P', (unsigned int)ordinal);
 	make_name(function->dsect, 'D', (unsigned int)ordinal);
 	make_name(function->params, 'Q', (unsigned int)ordinal);
@@ -258,6 +299,7 @@ static void initialize_function_names(HLASM_FUNCTION *function, int ordinal, int
 static void analyze_ir_functions(void)
 {
 	int functionIndex;
+	unsigned int blockBase = 0U;
 	hs.functionCount = compiler.ir.functionCount;
 	hs.functions = xalloc((size_t)hs.functionCount * sizeof(*hs.functions));
 	for (functionIndex = 0; functionIndex < hs.functionCount; ++functionIndex)
@@ -268,6 +310,12 @@ static void analyze_ir_functions(void)
 		int localIndex;
 		int blockIndex;
 		initialize_function_names(function, functionIndex, irFunction->symbol);
+		function->blockBase = blockBase;
+		blockBase += (unsigned int)irFunction->blockCount;
+		if (blockBase > 0xFFFFFFU)
+		{
+			error("hlasm", "too many control-flow blocks");
+		}
 		function->ir = irFunction;
 		function->exported = irFunction->isExported;
 		function->localOffsets =
@@ -281,6 +329,10 @@ static void analyze_ir_functions(void)
 			const IrLocal *local = &irFunction->locals[localIndex];
 			offset = align_up(offset, local->alignment);
 			function->localOffsets[local->id] = offset;
+			if (local->size > (size_t)(INT_MAX - offset - 65536))
+			{
+				error("hlasm IR", "local frame exceeds the 31-bit address space");
+			}
 			offset += (int)local->size;
 		}
 		for (blockIndex = 0; blockIndex < irFunction->blockCount; ++blockIndex)
@@ -291,7 +343,7 @@ static void analyze_ir_functions(void)
 			     ++instructionIndex)
 			{
 				const IrInstruction *instruction = &block->instructions[instructionIndex];
-				int argumentBytes = instruction->argumentCount * 4;
+				int argumentBytes = instruction->argumentCount * 8 + 4;
 				if (instruction->result != IR_VALUE_NONE)
 				{
 					int size = ir_type_size(instruction->type);
@@ -365,15 +417,8 @@ static void add_immediate(int reg, int value)
 
 static void address_from_base(int reg, const char *base, int offset)
 {
-	if (offset >= 0 && offset <= 4095)
-	{
-		emit_op(NULL, "LA", "%d,%s+%d(,13)", reg, base, offset);
-	}
-	else
-	{
-		emit_op(NULL, "LA", "%d,%s(,13)", reg, base);
-		add_immediate(reg, offset);
-	}
+	emit_op(NULL, "LR", "%d,13", reg);
+	emit_op(NULL, "AFI", "%d,%s-%s+%d", reg, base, hs.function->dsect, offset);
 }
 
 static void set_condition_result(const char *branch)
@@ -488,11 +533,8 @@ static void emit_main_arguments_and_call(int symbolId)
 	dsa_address(1, hs.function->mainArgv);
 	emit_op(NULL, "ST", "9,0(,1)");
 	dsa_address(1, hs.function->mainPlist);
-	dsa_address(0, hs.function->mainArgc);
-	emit_op(NULL, "ST", "0,0(,1)");
-	dsa_address(0, hs.function->mainArgv);
-	emit_op(NULL, "OILF", "0,X'80000000'");
-	emit_op(NULL, "ST", "0,4(,1)");
+	emit_op(NULL, "ST", "10,0(,1)");
+	emit_op(NULL, "ST", "9,4(,1)");
 	symbol_name(symbol, symbolId);
 	emit_op(NULL, "LARL", "15,%s", symbol);
 	emit_op(NULL, "BALR", "14,15");
@@ -507,13 +549,13 @@ static void emit_function_entry(HLASM_FUNCTION *function)
 	emit("*");
 	if (function->ordinal > 0)
 	{
-		emit_op(NULL, "DROP", "13");
+		emit_op(NULL, "DROP", "11,13");
 	}
 	if (function->isMain)
 	{
 		emit_op(function->entry,
 		        "CEEENTRY",
-		        "PPA=%s,AUTO=%s,MAIN=YES,EXECOPS=NO",
+		        "PPA=%s,AUTO=%s,MAIN=YES,EXECOPS=NO,AMODE=31",
 		        function->ppa,
 		        function->workSize);
 	}
@@ -521,7 +563,7 @@ static void emit_function_entry(HLASM_FUNCTION *function)
 	{
 		emit_op(function->entry,
 		        "CEEENTRY",
-		        "PPA=%s,AUTO=%s,MAIN=NO,EXPORT=YES",
+		        "PPA=%s,AUTO=%s,MAIN=NO,EXPORT=YES,AMODE=31",
 		        function->ppa,
 		        function->workSize);
 	}
@@ -529,12 +571,19 @@ static void emit_function_entry(HLASM_FUNCTION *function)
 	{
 		emit_op(function->entry,
 		        "CEEENTRY",
-		        "PPA=%s,AUTO=%s,MAIN=NO",
+		        "PPA=%s,AUTO=%s,MAIN=NO,AMODE=31",
 		        function->ppa,
 		        function->workSize);
 	}
 	emit_op(NULL, "USING", "%s,13", function->dsect);
 	emit_op(NULL, "ST", "1,%s(,13)", function->params);
+	emit_op(NULL, "J", "E%06X", (unsigned int)function->ordinal);
+	emit_op(NULL, "LTORG", "");
+	{
+		char body[9];
+		make_name(body, 'E', (unsigned int)function->ordinal);
+		emit_op(body, "DS", "0H");
+	}
 	hs.function = function;
 }
 
@@ -559,6 +608,23 @@ static void emit_ir_bytes(const unsigned char *bytes, size_t begin, size_t end)
 	}
 }
 
+static void emit_zero_bytes(size_t size)
+{
+	while (size != 0U)
+	{
+		unsigned int count = size > 65535U ? 65535U : (unsigned int)size;
+		emit_op(NULL, "DC", "%uX'00'", count);
+		size -= count;
+	}
+}
+
+static void emit_unit_alias(const char *symbol, const char *kind, int ordinal)
+{
+	char name[64];
+	(void)snprintf(name, sizeof(name), "__cc_%s_%s_%u", hs.unitName, kind, (unsigned int)ordinal);
+	emit_alias(symbol, name);
+}
+
 static void emit_ir_data_objects(void)
 {
 	int globalIndex;
@@ -580,7 +646,7 @@ static void emit_ir_data_objects(void)
 		{
 			emit_op(NULL, "DS", "0F");
 		}
-		else if (global->alignment >= 2)
+		else
 		{
 			emit_op(NULL, "DS", "0H");
 		}
@@ -593,7 +659,7 @@ static void emit_ir_data_objects(void)
 		emit_op(label, "DS", "0C");
 		if (global->initializer == NULL)
 		{
-			emit_op(NULL, "DS", "XL%u", (unsigned int)global->zeroFillSize);
+			emit_zero_bytes(global->zeroFillSize);
 			continue;
 		}
 		for (relocationIndex = 0; relocationIndex < global->relocationCount; ++relocationIndex)
@@ -619,8 +685,7 @@ static void emit_ir_data_objects(void)
 		emit_ir_bytes(global->initializer, offset, global->initializerSize);
 		if (global->initializerSize < global->zeroFillSize)
 		{
-			emit_op(
-			    NULL, "DS", "XL%u", (unsigned int)(global->zeroFillSize - global->initializerSize));
+			emit_zero_bytes(global->zeroFillSize - global->initializerSize);
 		}
 	}
 }
@@ -629,11 +694,13 @@ static void emit_data(void)
 {
 	emit("*");
 	emit_op("CCDATA", "CSECT", "");
+	emit_unit_alias("CCDATA", "data", 0);
 	emit_op("CCDATA", "AMODE", "31");
 	emit_op("CCDATA", "RMODE", "ANY");
 	emit_op(NULL, "DS", "0D");
 	emit_ir_data_objects();
 	emit_op("CCPROG", "RSECT", "");
+	emit_unit_alias("CCPROG", "code", 0);
 }
 
 static void emit_dsects(void)
@@ -658,6 +725,7 @@ static void emit_dsects(void)
 		emit_op(function->dsect, "DSECT", "");
 		emit_op(NULL, "ORG", "%s+CEEDSASZ", function->dsect);
 		emit_op(function->params, "DS", "A");
+		emit_op(NULL, "DS", "0D");
 		emit_op(function->locals, "DS", "XL%d", function->frameSize > 0 ? function->frameSize : 1);
 		emit_op(function->argList, "DS", "%dA", function->maxStack / 4 + 1);
 		if (function->isMain)
@@ -700,22 +768,18 @@ static void load_ir_integer(int reg, IrValueId value)
 	{
 		error("hlasm IR", "value %d is not integral", value);
 	}
+	address_from_base(1, hs.function->locals, offset);
 	if (type.bits == 32U)
 	{
-		emit_op(NULL, "L", "%d,%s+%d(,13)", reg, hs.function->locals, offset);
+		emit_op(NULL, "L", "%d,0(,1)", reg);
 	}
 	else if (type.bits == 16U)
 	{
-		emit_op(NULL,
-		        type.isUnsigned ? "LLH" : "LH",
-		        "%d,%s+%d(,13)",
-		        reg,
-		        hs.function->locals,
-		        offset);
+		emit_op(NULL, type.isUnsigned ? "LLH" : "LH", "%d,0(,1)", reg);
 	}
 	else if (type.bits == 8U)
 	{
-		emit_op(NULL, "LLGC", "%d,%s+%d(,13)", reg, hs.function->locals, offset);
+		emit_op(NULL, "LLGC", "%d,0(,1)", reg);
 		if (!type.isUnsigned)
 		{
 			emit_op(NULL, "SLL", "%d,24", reg);
@@ -742,27 +806,38 @@ static void store_ir_integer(int reg, IrValueId value)
 	{
 		error("hlasm IR", "unsupported integral width %u", type.bits);
 	}
-	emit_op(NULL, operation, "%d,%s+%d(,13)", reg, hs.function->locals, offset);
+	address_from_base(1, hs.function->locals, offset);
+	emit_op(NULL, operation, "%d,0(,1)", reg);
 }
 
 static void load_ir_float(int reg, IrValueId value)
 {
 	IrType type = ir_value_type(value);
-	if (type.kind != IR_TYPE_FLOAT || type.bits != 64U)
+	if (type.kind != IR_TYPE_FLOAT || (type.bits != 32U && type.bits != 64U))
 	{
 		error("hlasm IR", "only IEEE binary64 values are supported");
 	}
-	emit_op(NULL, "LD", "%d,%s+%d(,13)", reg, hs.function->locals, ir_value_offset(value));
+	address_from_base(1, hs.function->locals, ir_value_offset(value));
+	emit_op(NULL, type.bits == 32U ? "LE" : "LD", "%d,0(,1)", reg);
+	if (type.bits == 32U)
+	{
+		emit_op(NULL, "LDEBR", "%d,%d", reg, reg);
+	}
 }
 
 static void store_ir_float(int reg, IrValueId value)
 {
 	IrType type = ir_value_type(value);
-	if (type.kind != IR_TYPE_FLOAT || type.bits != 64U)
+	if (type.kind != IR_TYPE_FLOAT || (type.bits != 32U && type.bits != 64U))
 	{
 		error("hlasm IR", "only IEEE binary64 values are supported");
 	}
-	emit_op(NULL, "STD", "%d,%s+%d(,13)", reg, hs.function->locals, ir_value_offset(value));
+	address_from_base(1, hs.function->locals, ir_value_offset(value));
+	if (type.bits == 32U)
+	{
+		emit_op(NULL, "LEDBR", "%d,%d", reg, reg);
+	}
+	emit_op(NULL, type.bits == 32U ? "STE" : "STD", "%d,0(,1)", reg);
 }
 
 static void emit_ir_block_label(IrBlockId block)
@@ -830,33 +905,84 @@ static void normalize_ir_integer(int reg, IrType type)
 	}
 }
 
+static int c_parameter_offset(int count)
+{
+	int offset = (hs.function->ir->returnType.kind == IR_TYPE_FLOAT ||
+	              hs.function->ir->returnType.kind == IR_TYPE_AGGREGATE)
+	                 ? 4
+	                 : 0;
+	int index;
+	for (index = 0; index < count; ++index)
+	{
+		offset += align_up(ir_type_size(hs.function->ir->parameterTypes[index]), 4);
+	}
+	return offset;
+}
+
 static void emit_ir_parameter(const IrInstruction *instruction)
 {
-	int index = instruction->offset;
-	emit_op(NULL, "L", "0,%s(,13)", hs.function->params);
-	emit_op(NULL, "L", "0,%d(,0)", index * 4);
-	emit_op(NULL, "NILF", "0,X'7FFFFFFF'");
+	emit_op(NULL, "L", "6,%s(,13)", hs.function->params);
+	add_immediate(6, c_parameter_offset(instruction->offset));
 	if (instruction->type.kind == IR_TYPE_FLOAT)
 	{
-		emit_op(NULL, "LD", "0,0(,0)");
+		emit_op(NULL, instruction->type.bits == 32U ? "LE" : "LD", "0,0(,6)");
+		if (instruction->type.bits == 32U)
+		{
+			emit_op(NULL, "LDEBR", "0,0");
+		}
 		store_ir_float(0, instruction->result);
 	}
 	else
 	{
-		if (instruction->type.bits == 32U)
+		emit_op(NULL, "L", "2,0(,6)");
+		if (instruction->type.kind == IR_TYPE_AGGREGATE && instruction->type.bits < 32U)
 		{
-			emit_op(NULL, "L", "2,0(,0)");
+			emit_op(NULL, "SRL", "2,%u", 32U - instruction->type.bits);
 		}
-		else if (instruction->type.bits == 16U)
+		normalize_ir_integer(2, instruction->type);
+		store_ir_integer(2, instruction->result);
+	}
+}
+
+static void emit_ir_variadic(const IrInstruction *instruction)
+{
+	load_ir_integer(3, instruction->left);
+	if (instruction->opcode == IR_OP_VA_START)
+	{
+		emit_op(NULL, "L", "2,%s(,13)", hs.function->params);
+		add_immediate(2, c_parameter_offset(hs.function->ir->parameterCount));
+		emit_op(NULL, "ST", "2,0(,3)");
+	}
+	else if (instruction->opcode == IR_OP_VA_COPY)
+	{
+		load_ir_integer(2, instruction->right);
+		emit_op(NULL, "L", "2,0(,2)");
+		emit_op(NULL, "ST", "2,0(,3)");
+	}
+	else if (instruction->opcode == IR_OP_VA_END)
+	{
+		emit_op(NULL, "XC", "0(4,3),0(3)");
+	}
+	else
+	{
+		emit_op(NULL, "L", "6,0(,3)");
+		emit_op(NULL, "LR", "2,6");
+		add_immediate(2, align_up(ir_type_size(instruction->type), 4));
+		emit_op(NULL, "ST", "2,0(,3)");
+		if (instruction->type.kind == IR_TYPE_FLOAT)
 		{
-			emit_op(NULL, instruction->type.isUnsigned ? "LLH" : "LH", "2,0(,0)");
+			emit_op(NULL, "LD", "0,0(,6)");
+			store_ir_float(0, instruction->result);
 		}
 		else
 		{
-			emit_op(NULL, "LLGC", "2,0(,0)");
-			normalize_ir_integer(2, instruction->type);
+			emit_op(NULL, "L", "2,0(,6)");
+			if (instruction->type.kind == IR_TYPE_AGGREGATE && instruction->type.bits < 32U)
+			{
+				emit_op(NULL, "SRL", "2,%u", 32U - instruction->type.bits);
+			}
+			store_ir_integer(2, instruction->result);
 		}
-		store_ir_integer(2, instruction->result);
 	}
 }
 
@@ -864,6 +990,7 @@ static void emit_ir_call(const IrInstruction *instruction)
 {
 	char symbol[9];
 	int argumentIndex;
+	int offset = 0;
 	if (hs.function->isMain && instruction->symbol >= 0 &&
 	    strcmp(source_name(instruction->symbol), "main") == 0)
 	{
@@ -871,24 +998,38 @@ static void emit_ir_call(const IrInstruction *instruction)
 	}
 	else
 	{
+		if (instruction->type.kind == IR_TYPE_FLOAT || instruction->type.kind == IR_TYPE_AGGREGATE)
+		{
+			address_from_base(2, hs.function->locals, ir_value_offset(instruction->result));
+			address_from_base(1, hs.function->argList, 0);
+			emit_op(NULL, "ST", "2,0(,1)");
+			offset = 4;
+		}
 		for (argumentIndex = 0; argumentIndex < instruction->argumentCount; ++argumentIndex)
 		{
-			int offset = ir_value_offset(instruction->arguments[argumentIndex]);
-			emit_op(NULL, "LA", "0,%s+%d(,13)", hs.function->locals, offset);
-			emit_op(NULL, "ST", "0,%s+%d(,13)", hs.function->argList, argumentIndex * 4);
-		}
-		if (instruction->argumentCount > 0)
-		{
-			emit_op(NULL,
-			        "OI",
-			        "%s+%d(13),X'80'",
-			        hs.function->argList,
-			        (instruction->argumentCount - 1) * 4);
-			emit_op(NULL, "LA", "1,%s(,13)", hs.function->argList);
-		}
-		else
-		{
-			emit_op(NULL, "XR", "1,1");
+			IrValueId argument = instruction->arguments[argumentIndex];
+			IrType type = ir_value_type(argument);
+			if (type.kind == IR_TYPE_FLOAT)
+			{
+				load_ir_float(0, argument);
+				address_from_base(1, hs.function->argList, offset);
+				if (type.bits == 32U)
+				{
+					emit_op(NULL, "LEDBR", "0,0");
+				}
+				emit_op(NULL, type.bits == 32U ? "STE" : "STD", "0,0(,1)");
+			}
+			else
+			{
+				load_ir_integer(2, argument);
+				if (type.kind == IR_TYPE_AGGREGATE && type.bits < 32U)
+				{
+					emit_op(NULL, "SLL", "2,%u", 32U - type.bits);
+				}
+				address_from_base(1, hs.function->argList, offset);
+				emit_op(NULL, "ST", "2,0(,1)");
+			}
+			offset += align_up(ir_type_size(type), 4);
 		}
 		if (instruction->opcode == IR_OP_CALL_INDIRECT)
 		{
@@ -899,22 +1040,14 @@ static void emit_ir_call(const IrInstruction *instruction)
 			ir_symbol_name(symbol, instruction->symbol);
 			emit_op(NULL, "LARL", "15,%s", symbol);
 		}
+		address_from_base(1, hs.function->argList, 0);
 		emit_op(NULL, "BALR", "14,15");
-		if (instruction->type.kind != IR_TYPE_FLOAT)
-		{
-			emit_op(NULL, "LR", "2,15");
-		}
+		emit_op(NULL, "LR", "2,15");
 	}
-	if (instruction->result != IR_VALUE_NONE)
+	if (instruction->result != IR_VALUE_NONE && instruction->type.kind != IR_TYPE_FLOAT &&
+	    instruction->type.kind != IR_TYPE_AGGREGATE)
 	{
-		if (instruction->type.kind == IR_TYPE_FLOAT)
-		{
-			store_ir_float(0, instruction->result);
-		}
-		else
-		{
-			store_ir_integer(2, instruction->result);
-		}
+		store_ir_integer(2, instruction->result);
 	}
 }
 
@@ -1040,6 +1173,33 @@ static void emit_ir_binary(const IrInstruction *instruction)
 	store_ir_integer(2, instruction->result);
 }
 
+static void emit_float_constant(const IrInstruction *instruction)
+{
+	unsigned char bytes[8];
+	unsigned int endianProbe = 1U;
+	int littleEndian = *(unsigned char *)&endianProbe != 0;
+	char encoded[17];
+	char constant[9];
+	char continuation[9];
+	int index;
+	memcpy(bytes, &instruction->floating, sizeof(bytes));
+	for (index = 0; index < 8; ++index)
+	{
+		(void)snprintf(encoded + index * 2,
+		               sizeof(encoded) - (size_t)index * 2U,
+		               "%02X",
+		               bytes[littleEndian ? 7 - index : index]);
+	}
+	generated_name(constant);
+	generated_name(continuation);
+	emit_op(NULL, "J", "%s", continuation);
+	emit_op(NULL, "DS", "0D");
+	emit_op(constant, "DC", "X'%s'", encoded);
+	emit_op(continuation, "LARL", "1,%s", constant);
+	emit_op(NULL, "LD", "0,0(,1)");
+	store_ir_float(0, instruction->result);
+}
+
 static void emit_ir_instruction(const IrInstruction *instruction)
 {
 	char label[9];
@@ -1055,8 +1215,7 @@ static void emit_ir_instruction(const IrInstruction *instruction)
 		store_ir_integer(2, instruction->result);
 		break;
 	case IR_OP_CONSTANT_FLOAT:
-		emit_op(NULL, "LD", "0,=D'%.17G'", instruction->floating);
-		store_ir_float(0, instruction->result);
+		emit_float_constant(instruction);
 		break;
 	case IR_OP_ADDRESS_OF:
 		ir_symbol_name(label, instruction->symbol);
@@ -1081,7 +1240,11 @@ static void emit_ir_instruction(const IrInstruction *instruction)
 		load_ir_integer(2, instruction->left);
 		if (instruction->type.kind == IR_TYPE_FLOAT)
 		{
-			emit_op(NULL, "LD", "0,0(,2)");
+			emit_op(NULL, instruction->type.bits == 32U ? "LE" : "LD", "0,0(,2)");
+			if (instruction->type.bits == 32U)
+			{
+				emit_op(NULL, "LDEBR", "0,0");
+			}
 			store_ir_float(0, instruction->result);
 		}
 		else
@@ -1103,7 +1266,11 @@ static void emit_ir_instruction(const IrInstruction *instruction)
 		if (instruction->type.kind == IR_TYPE_FLOAT)
 		{
 			load_ir_float(0, instruction->right);
-			emit_op(NULL, "STD", "0,0(,3)");
+			if (instruction->type.bits == 32U)
+			{
+				emit_op(NULL, "LEDBR", "0,0");
+			}
+			emit_op(NULL, instruction->type.bits == 32U ? "STE" : "STD", "0,0(,3)");
 		}
 		else
 		{
@@ -1190,6 +1357,25 @@ static void emit_ir_instruction(const IrInstruction *instruction)
 			load_ir_float(0, instruction->left);
 			load_ir_float(2, instruction->right);
 			emit_op(NULL, "CDBR", "0,2");
+			if (instruction->condition == IR_COMPARE_LESS_EQUAL_SIGNED ||
+			    instruction->condition == IR_COMPARE_GREATER_EQUAL_SIGNED)
+			{
+				char yes[9];
+				char done[9];
+				generated_name(yes);
+				generated_name(done);
+				emit_op(NULL,
+				        "BRCL",
+				        "%d,%s",
+				        instruction->condition == IR_COMPARE_LESS_EQUAL_SIGNED ? 12 : 10,
+				        yes);
+				emit_op(NULL, "XR", "2,2");
+				emit_op(NULL, "J", "%s", done);
+				emit_op(yes, "LHI", "2,1");
+				emit_op(done, "DS", "0H");
+				store_ir_integer(2, instruction->result);
+				break;
+			}
 		}
 		else
 		{
@@ -1208,6 +1394,12 @@ static void emit_ir_instruction(const IrInstruction *instruction)
 	case IR_OP_CALL_INDIRECT:
 		emit_ir_call(instruction);
 		break;
+	case IR_OP_VA_START:
+	case IR_OP_VA_ARGUMENT:
+	case IR_OP_VA_COPY:
+	case IR_OP_VA_END:
+		emit_ir_variadic(instruction);
+		break;
 	case IR_OP_BRANCH:
 		location_name(label, instruction->trueBlock);
 		emit_op(NULL, "J", "%s", label);
@@ -1224,6 +1416,25 @@ static void emit_ir_instruction(const IrInstruction *instruction)
 		if (instruction->type.kind == IR_TYPE_FLOAT)
 		{
 			load_ir_float(0, instruction->left);
+			emit_op(NULL, "L", "6,%s(,13)", hs.function->params);
+			emit_op(NULL, "L", "6,0(,6)");
+			if (instruction->type.bits == 32U)
+			{
+				emit_op(NULL, "LEDBR", "0,0");
+			}
+			emit_op(NULL, instruction->type.bits == 32U ? "STE" : "STD", "0,0(,6)");
+			emit_op(NULL, "CEETERM", "RC=0,MODIFIER=0");
+		}
+		else if (instruction->type.kind == IR_TYPE_AGGREGATE)
+		{
+			load_ir_integer(2, instruction->left);
+			emit_op(NULL, "L", "6,%s(,13)", hs.function->params);
+			emit_op(NULL, "L", "6,0(,6)");
+			emit_op(NULL,
+			        instruction->type.bits == 8U    ? "STC"
+			        : instruction->type.bits == 16U ? "STH"
+			                                        : "ST",
+			        "2,0(,6)");
 			emit_op(NULL, "CEETERM", "RC=0,MODIFIER=0");
 		}
 		else if (instruction->type.kind == IR_TYPE_VOID)
@@ -1332,6 +1543,7 @@ static void emit_ir_program(void)
 		HLASM_FUNCTION *function = &hs.functions[functionIndex];
 		if (function->ir->isInternal)
 		{
+			emit_unit_alias(function->entry, "function", function->ordinal);
 			continue;
 		}
 		{
@@ -1370,7 +1582,17 @@ static void emit_ir_program(void)
 void hlasm_link(const char *outputFile)
 {
 	int functionIndex;
+	const unsigned char *unit = (const unsigned char *)mcc.srcFile[mcc.mainfile];
+	uint32_t first = 2166136261U;
+	uint32_t second = 5381U;
 	memset(&hs, 0, sizeof(hs));
+	while (*unit != 0U)
+	{
+		unsigned int byte = *unit++;
+		first = (first ^ byte) * 16777619U;
+		second = ((second << 5) + second) ^ byte;
+	}
+	(void)snprintf(hs.unitName, sizeof(hs.unitName), "%08X%08X", first, second);
 	analyze_ir_functions();
 	hs.output = fopen(outputFile, "w");
 	if (hs.output == NULL)

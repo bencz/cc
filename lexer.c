@@ -35,6 +35,11 @@ void setToken(TOKEN *token, HASH *pHash)
 		{
 			token->type = TK_DOUBLE;
 			token->dval = strtod(tkstr, &end);
+			if (*end == 'f' || *end == 'F')
+			{
+				token->type = TK_FLOAT;
+				token->dval = (double)(float)token->dval;
+			}
 			if (*end == 'f' || *end == 'F' || *end == 'l' || *end == 'L')
 			{
 				++end;
@@ -138,9 +143,8 @@ void setToken(TOKEN *token, HASH *pHash)
 	}
 	else if (tkstr[0] == '\'')
 	{
-		token->numericEscape = tkstr[1] == '\\' &&
-		                       ((tkstr[2] >= '0' && tkstr[2] <= '7') || tkstr[2] == 'x' ||
-		                        tkstr[2] == 'X');
+		token->numericEscape = tkstr[1] == '\\' && ((tkstr[2] >= '0' && tkstr[2] <= '7') ||
+		                                            tkstr[2] == 'x' || tkstr[2] == 'X');
 		int value = tkstr[1] != '\\' ? (unsigned char)tkstr[1] : decodeEscape(tkstr + 2);
 		token->type = TK_CHAR;
 		token->ival = value;

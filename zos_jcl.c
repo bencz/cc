@@ -69,23 +69,38 @@ void zos_write_jcl(const char *assemblyFile, const char *jclFile)
 	}
 	fprintf(output,
 	        "/*\n"
-	        "//BIND EXEC PGM=IEWL,COND=(0,NE,ASM),\n"
+	        "//IEEE EXEC PGM=CCNDRVR,COND=(0,NE,ASM),REGION=0M,\n"
+	        "// PARM='NOXPLINK,FLOAT(IEEE),NORENT,LONGNAME'\n"
+	        "//STEPLIB DD DISP=SHR,DSN=CBC.SCCNCMP\n"
+	        "// DD DISP=SHR,DSN=CEE.SCEERUN2\n"
+	        "// DD DISP=SHR,DSN=CEE.SCEERUN\n"
+	        "//SYSLIB DD DISP=SHR,DSN=CEE.SCEEH.H\n"
+	        "//SYSUT1 DD UNIT=SYSDA,SPACE=(CYL,(1,1))\n"
+	        "//SYSPRINT DD SYSOUT=*\n"
+	        "//SYSLIN DD DSN=&&IEEEOBJ,DISP=(NEW,PASS),UNIT=SYSDA,\n"
+	        "// SPACE=(TRK,(1,1)),DCB=(RECFM=FB,LRECL=80,BLKSIZE=0)\n"
+	        "//SYSIN DD *\n%s/*\n"
+	        "//BIND EXEC PGM=IEWL,COND=((0,NE,ASM),(0,NE,IEEE)),\n"
 	        "// PARM='MAP,XREF,LIST,NORENT,NOREUS,AMODE=31,RMODE=ANY'\n"
 	        "//SYSPRINT DD SYSOUT=*\n"
 	        "//SYSUT1 DD UNIT=SYSDA,SPACE=(CYL,(1,1))\n"
 	        "//SYSLIB DD DISP=SHR,DSN=CEE.SCEELKED\n"
+	        "// DD DISP=SHR,DSN=CEE.SCEELKEX\n"
 	        "//SYSLMOD DD DSN=&&LOAD(%s),DISP=(NEW,PASS),UNIT=SYSDA,\n"
 	        "// SPACE=(TRK,(5,5,1)),DSNTYPE=LIBRARY\n"
 	        "//SYSLIN DD DSN=&&OBJ,DISP=(OLD,DELETE)\n"
+	        "// DD DSN=&&IEEEOBJ,DISP=(OLD,DELETE)\n"
 	        "// DD *\n"
 	        " NAME %s(R)\n"
 	        "/*\n"
-	        "//RUN EXEC PGM=%s,COND=((0,NE,ASM),(0,NE,BIND)),PARM=''\n"
+	        "//RUN EXEC PGM=%s,COND=((0,NE,ASM),(0,NE,IEEE),\n"
+	        "// (0,NE,BIND)),PARM=''\n"
 	        "//STEPLIB DD DSN=&&LOAD,DISP=(OLD,DELETE)\n"
 	        "//SYSOUT DD SYSOUT=*\n"
 	        "//SYSPRINT DD SYSOUT=*\n"
 	        "//CEEDUMP DD SYSOUT=*\n"
 	        "//SYSUDUMP DD SYSOUT=*\n",
+	        zosRuntimeSource(),
 	        member,
 	        member,
 	        member);

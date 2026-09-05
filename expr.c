@@ -16,460 +16,211 @@ static void castExpression(int mode, VALUE *value);
 static void unaryExpression(int mode, VALUE *value);
 static void primaryExpression(int mode, VALUE *value);
 
-static int integerResultType(const VALUE *left, const VALUE *right)
+static double constantReal(const VALUE *value)
 {
-	if (left->ptrs > 0)
+	if (isFloatingType(value->type))
 	{
-		return left->type;
+		return value->rval;
 	}
-	if (right->ptrs > 0)
-	{
-		return right->type;
-	}
-	return usualIntegerType(left->type, right->type);
+	return isUnsignedType(value->type) ? (double)(uint32_t)value->ival : (double)value->ival;
 }
 
-static int unsignedIntegerOperation(const VALUE *left, const VALUE *right)
+/* Fold metadata separately from IR emission; never select machine instructions here. */
+void infixOperation(int op, VALUE *left, VALUE *right, int leftBegin, int leftEnd)
 {
-	return left->ptrs == 0 && right->ptrs == 0 &&
-	       isUnsignedType(usualIntegerType(left->type, right->type));
-}
-
-static int comparisonInstruction(int op, int isUnsigned)
-{
-	if (!isUnsigned)
+	int comparison = op == id2("==") || op == id2("!=") || op == '<' || op == '>' ||
+	                 op == id2("<=") || op == id2(">=");
+	int shift = op == FRONTEND_OP_SHIFT_LEFT || op == FRONTEND_OP_SHIFT_RIGHT || op == id2("<<") ||
+	            op == id2(">>");
+	int resultType;
+	int constant = left->fConst && right->fConst;
+	int leftPointers = left->ptrs;
+	int rightPointers = right->ptrs;
+	int originalType = left->type;
+	double realLeft = 0.0;
+	double realRight = 0.0;
+	uint32_t a = (uint32_t)left->ival;
+	uint32_t b = (uint32_t)right->ival;
+	int floating = isFloatingType(left->type) || isFloatingType(right->type);
+	(void)leftBegin;
+	(void)leftEnd;
+	if (op == '=')
 	{
-		return op == '<'         ? setl_eax
-		       : op == '>'       ? setg_eax
-		       : op == id2("<=") ? setle_eax
-		                         : setge_eax;
+		semanticIrBinary(op, left, right);
+		left->fConst = FALSE;
+		return;
 	}
-	return op == '<' ? setb_eax : op == '>' ? seta_eax : op == id2("<=") ? setbe_eax : setae_eax;
-}
-
-/* Binary operators */
-
-void infixOperation(int op, VALUE *v1, VALUE *v2, int lbgn, int lend)
-{
-	semanticIrBinary(op, v1, v2);
-	if (op == FRONTEND_OP_SHIFT_LEFT)
+	if (floating && constant)
 	{
-		op = id2("<<");
+		realLeft = constantReal(left);
+		realRight = constantReal(right);
 	}
-	else if (op == FRONTEND_OP_SHIFT_RIGHT)
+	resultType = shift ? integerPromotion(left->type) : arithmeticType(left->type, right->type);
+	semanticIrBinary(op, left, right);
+	if (leftPointers > 0 || rightPointers > 0)
 	{
-		op = id2(">>");
-	}
-	int integerType =
-	    isIntegerType(v1->type) && isIntegerType(v2->type) ? integerResultType(v1, v2) : ID.T_INT;
-	int unsignedOperation =
-	    isIntegerType(v1->type) && isIntegerType(v2->type) && unsignedIntegerOperation(v1, v2);
-	if (v1->fConst && v2->fConst)
-	{
-		if (isIntegerType(v1->type) && isIntegerType(v2->type))
+		if (comparison || (op == '-' && leftPointers > 0 && rightPointers > 0))
 		{
-			uint32_t left = (uint32_t)v1->ival;
-			uint32_t right = (uint32_t)v2->ival;
-			int comparison = FALSE;
-			if (op == '+')
+			left->type = ID.T_INT;
+			left->ptrs = 0;
+			left->constantSymbol = IR_SYMBOL_NONE;
+		}
+		else if (leftPointers > 0 && rightPointers == 0 && (op == '+' || op == '-'))
+		{
+			if (left->constantSymbol != IR_SYMBOL_NONE && right->fConst)
 			{
-				left += right;
-			}
-			else if (op == '-')
-			{
-				left -= right;
-			}
-			else if (op == '*')
-			{
-				left *= right;
-			}
-			else if (op == '/' || op == '%')
-			{
-				if (right == 0U)
-				{
-					error("infixOp", "division by zero in constant expression");
-				}
-				if (unsignedOperation)
-				{
-					left = op == '/' ? left / right : left % right;
-				}
-				else
-				{
-					int32_t signedLeft = (int32_t)left;
-					int32_t signedRight = (int32_t)right;
-					if (signedLeft == INT32_MIN && signedRight == -1)
-					{
-						error("infixOp", "signed division overflow in constant expression");
-					}
-					left =
-					    (uint32_t)(op == '/' ? signedLeft / signedRight : signedLeft % signedRight);
-				}
-			}
-			else if (op == '|')
-			{
-				left |= right;
-			}
-			else if (op == '&')
-			{
-				left &= right;
-			}
-			else if (op == '^')
-			{
-				left ^= right;
-			}
-			else if (op == id2("<<") || op == id2(">>"))
-			{
-				if (right >= 32U)
-				{
-					error("infixOp", "shift count is outside the 32-bit target range");
-				}
-				if (op == id2("<<"))
-				{
-					left <<= right;
-				}
-				else if (unsignedOperation)
-				{
-					left >>= right;
-				}
-				else
-				{
-					left = (uint32_t)((int32_t)left >> right);
-				}
-			}
-			else if (op == id2("==") || op == id2("!="))
-			{
-				comparison = TRUE;
-				left = op == id2("==") ? left == right : left != right;
-			}
-			else if (op == '<' || op == '>' || op == id2("<=") || op == id2(">="))
-			{
-				comparison = TRUE;
-				if (unsignedOperation)
-				{
-					left = op == '<'         ? left < right
-					       : op == '>'       ? left > right
-					       : op == id2("<=") ? left <= right
-					                         : left >= right;
-				}
-				else
-				{
-					int32_t signedLeft = (int32_t)left;
-					int32_t signedRight = (int32_t)right;
-					left = op == '<'         ? signedLeft < signedRight
-					       : op == '>'       ? signedLeft > signedRight
-					       : op == id2("<=") ? signedLeft <= signedRight
-					                         : signedLeft >= signedRight;
-				}
-			}
-			else
-			{
-				v1->fConst = FALSE;
-			}
-			if (v1->fConst)
-			{
-				v1->ival = (int)left;
-				v1->type = comparison ? ID.T_INT : integerType;
+				int delta = right->ival * sizeOfObjectType(originalType, leftPointers - 1);
+				left->constantOffset += op == '+' ? delta : -delta;
+				left->fConst = TRUE;
+				return;
 			}
 		}
-		else if (v1->type == ID.T_DOUBLE || v2->type == ID.T_DOUBLE)
+		else if (rightPointers > 0 && leftPointers == 0 && op == '+')
 		{
-			double d1 = v1->type == ID.T_DOUBLE ? v1->rval : (double)v1->ival;
-			double d2 = v2->type == ID.T_DOUBLE ? v2->rval : (double)v2->ival;
-			v1->type = ID.T_DOUBLE;
+			left->type = right->type;
+			left->ptrs = rightPointers;
+		}
+		else
+		{
+			error("expression", "invalid pointer operands");
+		}
+		left->fConst = FALSE;
+		return;
+	}
+	if (floating && (shift || op == '%' || op == '&' || op == '|' || op == '^'))
+	{
+		error("expression", "integer operands required");
+	}
+	if (constant && floating)
+	{
+		if (comparison)
+		{
+			a = op == id2("==")   ? realLeft == realRight
+			    : op == id2("!=") ? realLeft != realRight
+			    : op == '<'       ? realLeft < realRight
+			    : op == '>'       ? realLeft > realRight
+			    : op == id2("<=") ? realLeft <= realRight
+			                      : realLeft >= realRight;
+		}
+		else
+		{
 			if (op == '+')
 			{
-				v1->rval = d1 + d2;
+				left->rval = realLeft + realRight;
 			}
 			else if (op == '-')
 			{
-				v1->rval = d1 - d2;
+				left->rval = realLeft - realRight;
 			}
 			else if (op == '*')
 			{
-				v1->rval = d1 * d2;
+				left->rval = realLeft * realRight;
 			}
 			else if (op == '/')
 			{
-				v1->rval = d1 / d2;
+				left->rval = realLeft / realRight;
 			}
 			else
 			{
-				v1->fConst = FALSE;
+				error("expression", "invalid floating-point operator");
 			}
-		}
-		else
-		{
-			v1->fConst = FALSE;
+			if (resultType == ID.T_FLOAT)
+			{
+				left->rval = (double)(float)left->rval;
+			}
 		}
 	}
-	else if (v2->fConst && lend > 0 && isIntegerType(v1->type) && isIntegerType(v2->type))
+	else if (constant)
 	{
-
-		if (v1->ptrs == 0 && (op == '+' || op == '-'))
+		int isUnsigned = isUnsignedType(resultType);
+		if (op == '+')
 		{
-			ix.ixCode = lend;
-			outCode2(op == '+' ? add_eax : sub_eax, v2->ival);
-			return;
+			a += b;
 		}
-		else if (op == '<' || op == '>' || op == id2("<=") || op == id2(">=") || op == id2("==") ||
-		         op == id2("!="))
+		else if (op == '-')
 		{
-			ix.ixCode = lend;
-			outCode2(cmp_eax, v2->ival);
-			if (unsignedOperation && op != id2("==") && op != id2("!="))
-			{
-				cd.pCode[ix.ixCode - 1].inst = ucmp_eax;
-			}
-			outCode1(op == id2("==")   ? sete_eax
-			         : op == id2("!=") ? setne_eax
-			                           : comparisonInstruction(op, unsignedOperation));
-			return;
+			a -= b;
 		}
 		else if (op == '*')
 		{
-			ix.ixCode = lend;
-			outCode2(imul_eax_eax, v2->ival);
-			return;
-		}
-		else
-		{
-			v1->fConst = FALSE;
-		}
-	}
-	else
-	{
-		v1->fConst = FALSE;
-	}
-	if ((v1->ptrs == 0 && v1->type == ID.T_DOUBLE) || (v2->ptrs == 0 && v2->type == ID.T_DOUBLE))
-	{
-		setFpuStack2(v1->type, v2->type);
-		if (op == '=')
-		{
-			int fLV = (lend == lbgn + 1 && cd.pCode[lbgn].inst == lea_eax_pbp);
-			if (fLV)
-			{
-				outCode3(fst_qbp, cd.pCode[lbgn].num, cd.pCode[lbgn].attr);
-				delCodes(lbgn, lbgn + 2);
-			}
-			else
-			{
-				outCode1(pop_ecx);
-				outCode1(fst_qcx);
-			}
-			outCode1(fstp_st1);
-			v1->type = ID.T_DOUBLE;
-		}
-		else if (op == id2("==") || op == id2("!="))
-		{
-			outCode1(fucompp);
-			outCode1(fstsw);
-			outCode2(and_ah, 0x45);
-			outCode2(op == id2("==") ? cmp_ah : xor_ah, 0x40);
-			outCode1(op == id2("==") ? sete_eax : setne_eax);
-			v1->type = ID.T_INT;
-		}
-		else if (op == '<' || op == '>' || op == id2("<=") || op == id2(">="))
-		{
-			if (op == '>' || op == id2(">="))
-			{
-				outCode1(fxch_st1);
-			}
-			outCode1(fucompp);
-			outCode1(fstsw);
-			outCode2(test_ah, (op == '<' || op == '>') ? 0x45 : 0x05);
-			outCode1(sete_eax);
-			v1->type = ID.T_INT;
-		}
-		else if (op == '+' || op == '-' || op == '*' || op == '/')
-		{
-			int *pI = &cd.pCode[ix.ixCode - 1].inst;
-			if (*pI == fld_qbp)
-			{
-				*pI = op == '+' ? fadd_qbp : op == '-' ? fsub_qbp : op == '*' ? fmul_qbp : fdiv_qbp;
-			}
-			else if (*pI == fld_qp)
-			{
-				*pI = op == '+' ? fadd_qp : op == '-' ? fsub_qp : op == '*' ? fmul_qp : fdiv_qp;
-			}
-			else
-			{
-				outCode1(op == '+'   ? faddp_st1_st
-				         : op == '-' ? fsubrp_st1_st
-				         : op == '*' ? fmulp_st1_st
-				                     : fdivrp_st1_st);
-			}
-			v1->type = ID.T_DOUBLE;
-		}
-		else
-		{
-			error("infixOp", "unsuported infixOp '%s'", toString(op));
-		}
-	}
-	else
-	{
-		int n = sizeOfObjectType(v1->type, v1->ptrs);
-		int fLV4 = (n == 4 && lend == lbgn + 1 && cd.pCode[lbgn].inst == lea_eax_pbp);
-		if (fLV4 && (op == '=' || op == id2("+=") || op == id2("-=")))
-		{
-			int num = cd.pCode[lbgn].num;
-			int attr = cd.pCode[lbgn].attr;
-			int inst = op == '=' ? mov_pbp_eax : op == id2("+=") ? add_pbp_eax : sub_pbp_eax;
-			delCodes(lbgn, lbgn + 2);
-			outCode3(inst, num, attr);
-			return;
-		}
-		if (op == '=' && canonicalType(v1->type) == ID.T_BOOL)
-		{
-			outCode1(test_eax_eax);
-			outCode1(setne_eax);
-		}
-		int fECX = 1;
-		if (lend > 0 && cd.pCode[lend].inst == push_eax)
-		{
-			int i;
-			for (i = lend + 1; i < ix.ixCode && !(cd.pCode[i].regs & C); i++)
-				;
-			if (i == ix.ixCode)
-			{
-				fECX = 0;
-			}
-		}
-		if (fECX)
-		{
-			outCode1(pop_ecx);
-		}
-		else
-		{
-			int *pI = &cd.pCode[lend - 1].inst;
-			if (*pI == mov_eax)
-			{
-				*pI = mov_ecx;
-				delCode(lend);
-			}
-			else if (*pI == mov_eax_pbp)
-			{
-				*pI = mov_ecx_pbp;
-				delCode(lend);
-			}
-			else if (*pI == mov_eax_pax)
-			{
-				*pI = mov_ecx_pax;
-				delCode(lend);
-			}
-			else if (*pI >= lea_eax_da1 && *pI <= lea_eax_da8)
-			{
-				*pI = lea_ecx_da1 + (*pI - lea_eax_da1);
-				delCode(lend);
-			}
-			else
-			{
-				cd.pCode[lend].inst = mov_ecx_eax;
-			}
-		}
-		if (op == '=')
-		{
-			outCode1(n == 4 ? mov_pcx_eax : n == 2 ? mov_pcx_ax : mov_pcx_al);
-		}
-		else if (op == id2("+="))
-		{
-			outCode1(n == 4 ? add_pcx_eax : n == 2 ? add_pcx_ax : add_pcx_al);
-		}
-		else if (op == id2("-="))
-		{
-			outCode1(n == 4 ? sub_pcx_eax : n == 2 ? sub_pcx_ax : sub_pcx_al);
-		}
-		else if (op == id2("&="))
-		{
-			outCode1(n == 4 ? and_pcx_eax : n == 2 ? and_pcx_ax : and_pcx_al);
-		}
-		else if (op == id2("|="))
-		{
-			outCode1(n == 4 ? or_pcx_eax : n == 2 ? or_pcx_ax : or_pcx_al);
-		}
-		else if (op == id2("^="))
-		{
-			outCode1(n == 4 ? xor_pcx_eax : n == 2 ? xor_pcx_ax : xor_pcx_al);
-		}
-		else if (op == id2("==") || op == id2("!="))
-		{
-			outCode1(cmp_eax_ecx);
-			outCode1(op == id2("==") ? sete_eax : setne_eax);
-		}
-		else if (op == '<' || op == '>' || op == id2("<=") || op == id2(">="))
-		{
-			outCode1(unsignedOperation ? ucmp_ecx_eax : cmp_ecx_eax);
-			outCode1(comparisonInstruction(op, unsignedOperation));
-			v1->type = ID.T_INT;
-		}
-		else if (op == '+' || op == '-')
-		{
-			n = sizeOfObjectType(v1->type, v1->ptrs - 1);
-			if (v1->ptrs > 0 && v2->ptrs == 0 && n > 1)
-			{
-				outCode2(imul_eax_eax, n);
-			}
-			if (op == '+')
-			{
-				outCode1(add_eax_ecx);
-			}
-			else
-			{
-				outCode1(xchg_eax_ecx);
-				outCode1(sub_eax_ecx);
-				if (v1->ptrs > 0 && v2->ptrs > 0)
-				{
-					outCode2(mov_ecx, n);
-					outCode1(xdiv_ecx);
-				}
-			}
-			return;
-		}
-		else if (op == '*')
-		{
-			int lastCode = ix.ixCode - 1;
-			if (cd.pCode[lastCode - 1].inst == mov_ecx_pbp &&
-			    cd.pCode[lastCode].inst == mov_eax_pbp)
-			{
-				cd.pCode[lastCode - 1].inst = mov_eax_pbp;
-				cd.pCode[lastCode].inst = imul_eax_pbp;
-			}
-			else
-			{
-				outCode1(imul_eax_ecx);
-			}
+			a *= b;
 		}
 		else if (op == '/' || op == '%')
 		{
-			outCode1(xchg_eax_ecx);
-			outCode1(unsignedOperation ? (op == '/' ? udiv_ecx : umod_ecx)
-			                           : (op == '/' ? xdiv_ecx : xmod_ecx));
+			if (b == 0U || (!isUnsigned && (int32_t)a == INT32_MIN && (int32_t)b == -1))
+			{
+				error("expression", "invalid constant division");
+			}
+			if (isUnsigned)
+			{
+				a = op == '/' ? a / b : a % b;
+			}
+			else
+			{
+				a = (uint32_t)(op == '/' ? (int32_t)a / (int32_t)b : (int32_t)a % (int32_t)b);
+			}
 		}
-		else if (op == '|' || op == '&' || op == '^')
+		else if (shift)
 		{
-			outCode1(op == '|' ? or_eax_ecx : op == '&' ? and_eax_ecx : xor_eax_ecx);
+			if (b >= 32U)
+			{
+				error("expression", "shift count is outside the 32-bit target range");
+			}
+			if (op == FRONTEND_OP_SHIFT_LEFT || op == id2("<<"))
+			{
+				a <<= b;
+			}
+			else
+			{
+				a = isUnsigned ? a >> b : (uint32_t)((int32_t)a >> b);
+			}
 		}
-		else if (op == id2("<<") || op == id2(">>"))
+		else if (op == '&')
 		{
-			outCode1(xchg_eax_ecx);
-			outCode1(op == id2("<<")
-			             ? shl_eax_cl
-			             : (isUnsignedType(integerPromotion(v1->type)) ? shr_eax_cl : sar_eax_cl));
+			a &= b;
+		}
+		else if (op == '|')
+		{
+			a |= b;
+		}
+		else if (op == '^')
+		{
+			a ^= b;
+		}
+		else if (op == id2("==") || op == id2("!="))
+		{
+			a = op == id2("==") ? a == b : a != b;
+		}
+		else if (comparison)
+		{
+			if (isUnsigned)
+			{
+				a = op == '<' ? a < b : op == '>' ? a > b : op == id2("<=") ? a <= b : a >= b;
+			}
+			else
+			{
+				int32_t sa = (int32_t)a;
+				int32_t sb = (int32_t)b;
+				a = op == '<'         ? sa < sb
+				    : op == '>'       ? sa > sb
+				    : op == id2("<=") ? sa <= sb
+				                      : sa >= sb;
+			}
 		}
 		else
 		{
-			error("infixOp", "unsuported infixOp '%s'", toString(op));
-		}
-		if (op != id2("==") && op != id2("!=") && op != '<' && op != '>' && op != id2("<=") &&
-		    op != id2(">="))
-		{
-			v1->type = integerType;
+			error("expression", "invalid integer operator");
 		}
 	}
+	left->ival = (int)a;
+	left->type = comparison ? ID.T_INT : resultType;
+	left->ptrs = 0;
+	left->mode = VAL;
+	left->fConst = constant;
+	left->constantSymbol = IR_SYMBOL_NONE;
+	left->object = NULL;
+	left->arrayDepth = 0;
 }
-
-/*============================================================================
- * Expression
- *============================================================================*/
 
 void expression(int mode, VALUE *pv)
 {
@@ -484,89 +235,42 @@ void expression(int mode, VALUE *pv)
  * Assign Expression
  *============================================================================*/
 
-void assignExpression(int mode, VALUE *pv)
+void assignExpression(int mode, VALUE *value)
 {
-	VALUE vr;
-	INDEX ixSave;
-	memcpy(&ixSave, &ix, sizeof(ix));
+	INDEX saved;
+	VALUE right;
+	const char *operatorText;
+	int operation;
+	int assignment;
+	memcpy(&saved, &ix, sizeof(saved));
 	irBuilderSuspend(&compiler.irBuilder);
-	castExpression(ADDR, pv);
+	castExpression(ADDR, value);
 	irBuilderResume(&compiler.irBuilder);
-	char *t = cd.token[ix.tix].token;
-	if (strchr(";,])", *t) != NULL && pv->mode == VAL)
+	operatorText = cd.token[ix.tix].token;
+	assignment = strcmp(operatorText, "=") == 0 || strcmp(operatorText, "<<=") == 0 ||
+	             strcmp(operatorText, ">>=") == 0 ||
+	             (strchr("+-/*%|&^", operatorText[0]) != NULL && operatorText[1] == '=');
+	memcpy(&ix, &saved, sizeof(ix));
+	if (!assignment)
 	{
-		memcpy(&ix, &ixSave, sizeof(ix));
-		conditionalExpression(mode, pv);
+		conditionalExpression(mode, value);
 		return;
 	}
-	memcpy(&ix, &ixSave, sizeof(ix));
-	int shiftAssign = strcmp(t, "<<=") == 0 || strcmp(t, ">>=") == 0;
-	int fAssign = (*t == '=' && t[1] == '\0') || (strchr("+-/*%|&^", *t) != NULL && t[1] == '=') ||
-	              shiftAssign;
-	if (!fAssign)
+	castExpression(ADDR, value);
+	if (value->mode != ADDR)
 	{
-		conditionalExpression(mode, pv);
-		return;
+		error("assignment", "modifiable lvalue required");
 	}
-	castExpression(ADDR, pv);
-	if (pv->mode != ADDR)
-	{
-		error("assignExpr", "lvalue expected");
-	}
-	int op = cd.token[ix.tix].ival;
-	t = cd.token[ix.tix++].token;
-	int ixOp2 = ix.ixCode;
-	outCode1(push_eax);
-	if ((pv->ptrs > 0 || pv->type != ID.T_DOUBLE) && op != id2("*=") && op != id2("/=") &&
-	    op != id2("%=") && !shiftAssign && !(canonicalType(pv->type) == ID.T_BOOL && t[1] != '\0'))
-	{
-		assignExpression(VAL, &vr);
-		infixOperation(op, pv, &vr, ixSave.ixCode, ixOp2);
-		int k = ix.ixCode - 1;
-		if (op == '=' && cd.pCode[k - 1].inst == pop_ecx && cd.pCode[k].inst == mov_pcx_eax)
-		{
-			if (k - ixOp2 == 3 && cd.pCode[ixOp2 + 1].inst == mov_eax)
-			{
-				cd.pCode[ixOp2 + 1].inst = mov_dax;
-				delCode(k);
-				delCode(k - 1);
-				delCode(ixOp2);
-			}
-		}
-		return;
-	}
-	if (t[1] != '\0')
-	{
-		int size = sizeOfObjectType(pv->type, pv->ptrs);
-		if (size == 8)
-		{
-			outCode1(fld_qax);
-		}
-		else
-		{
-			outCode1(size == 4   ? mov_eax_pax
-			         : size == 2 ? (isUnsignedType(pv->type) ? movzx_eax_wax : movsx_eax_wax)
-			                     : (isUnsignedType(pv->type) ? movzx_eax_bax : movsx_eax_bax));
-			outCode1(push_eax);
-		}
-	}
-	assignExpression(VAL, &vr);
-	if (t[0] != '=')
-	{
-		VALUE assignmentTarget;
-
-		memcpy(&assignmentTarget, pv, sizeof(assignmentTarget));
-		infixOperation(shiftAssign ? id2(t) : t[0], pv, &vr, -1, -1);
-		pv->type = assignmentTarget.type;
-		pv->ptrs = assignmentTarget.ptrs;
-		pv->objectSize = assignmentTarget.objectSize;
-		pv->irAddress = assignmentTarget.irAddress;
-		infixOperation('=', pv, &vr, -1, -1);
-	}
-	else
-	{
-		infixOperation('=', pv, &vr, ixSave.ixCode, ixOp2);
-	}
+	operatorText = cd.token[ix.tix].token;
+	operation = strcmp(operatorText, "<<=") == 0 || strcmp(operatorText, ">>=") == 0
+	                ? id2(cd.token[ix.tix].token)
+	                : cd.token[ix.tix].ival;
+	++ix.tix;
+	assignExpression(VAL, &right);
+	semanticIrBinary(operation, value, &right);
+	value->fConst = FALSE;
+	value->constantSymbol = IR_SYMBOL_NONE;
+	value->mode = VAL;
 }
 
 /*============================================================================
@@ -710,7 +414,6 @@ static void logicalOrExpression(int mode, VALUE *pv)
 		semanticIrSelectBlock(rightBlock);
 		jumpTrue(locTRUE);
 		logicalAndExpression(mode, pv);
-		pv->type = ID.T_INT;
 	}
 	semanticIrBranchCondition(pv, trueBlock, falseBlock);
 	jumpTrue(locTRUE);
@@ -762,7 +465,6 @@ static void logicalAndExpression(int mode, VALUE *pv)
 		semanticIrSelectBlock(rightBlock);
 		jumpFalse(locFalse);
 		orExpression(mode, pv);
-		pv->type = ID.T_INT;
 	}
 	semanticIrBranchCondition(pv, trueBlock, falseBlock);
 	jumpFalse(locFalse);
@@ -944,125 +646,69 @@ static void mulExpression(int mode, VALUE *pv)
  * Cast Expression
  *============================================================================*/
 
-static void castExpression(int mode, VALUE *pv)
+static void castExpression(int mode, VALUE *value)
 {
+	int destination;
+	int pointers;
+	int source;
+	double real = 0.0;
 	if (!is('(') || !(isTypeSpecifier(ix.tix + 1) && !isN('(', 2)))
 	{
-		unaryExpression(mode, pv);
+		unaryExpression(mode, value);
 		return;
 	}
 	++ix.tix;
 	typeSpecifier();
-	int idCastType = var.type;
-	int ptr = getPtr(idCastType);
-	for (; ispp('*');)
+	destination = canonicalType(var.type);
+	pointers = getPtr(var.type);
+	while (ispp('*'))
 	{
-		ptr++;
+		++pointers;
 	}
 	skip(')');
-	castExpression(mode, pv);
-	if (ptr > 0)
+	castExpression(mode, value);
+	source = canonicalType(value->type);
+	if (value->fConst)
 	{
-		;
+		real = constantReal(value);
 	}
-	else if (canonicalType(idCastType) == ID.T_VOID)
+	semanticIrCast(value, destination, pointers);
+	if (value->fConst && pointers == 0 && destination != ID.T_VOID)
 	{
-		/* The operand is still evaluated; only its resulting value is discarded. */
-	}
-	else if (canonicalType(idCastType) == ID.T_BOOL && pv->type == ID.T_DOUBLE)
-	{
-		outDataDouble(0.0);
-		outCode3(fld_qp, ix.ixData - 8, AD_DATA);
-		outCode1(fucompp);
-		outCode1(fstsw);
-		outCode2(and_ah, 0x45);
-		outCode2(cmp_ah, 0x40);
-		outCode1(setne_eax);
-		if (pv->fConst)
+		if (isFloatingType(destination))
 		{
-			pv->ival = pv->rval != 0.0;
+			value->rval = destination == ID.T_FLOAT ? (double)(float)real : real;
 		}
-	}
-	else if (isIntegerType(idCastType) && pv->type == ID.T_DOUBLE)
-	{
-		outCode3(fldcw, 2, AD_DATA);
-		if (isUnsignedType(idCastType))
+		else if (destination == ID.T_BOOL)
 		{
-			outCode1(fistp_ueax);
+			value->ival = real != 0.0;
 		}
-		else
+		else if (isIntegerType(destination))
 		{
-			outCode2(fistp_dsp, -4);
-			outCode2(mov_eax_psp, -4);
-		}
-		outCode3(fldcw, 0, AD_DATA);
-		if (pv->fConst)
-		{
-			pv->ival = isUnsignedType(idCastType) ? (int)(uint32_t)pv->rval : (int32_t)pv->rval;
-		}
-	}
-	else if (isIntegerType(idCastType) && (isIntegerType(pv->type) || pv->ptrs > 0))
-	{
-		int width = sizeOfDataType(idCastType);
-		if (idCastType == ID.T_BOOL)
-		{
-			outCode1(test_eax_eax);
-			outCode1(setne_eax);
-			if (pv->fConst)
+			uint32_t bits =
+			    isFloatingType(source)
+			        ? (isUnsignedType(destination) ? (uint32_t)real : (uint32_t)(int32_t)real)
+			        : (uint32_t)value->ival;
+			int width = sizeOfDataType(destination);
+			if (width == 1)
 			{
-				pv->ival = !!pv->ival;
+				bits = isUnsignedType(destination) ? (uint32_t)(uint8_t)bits
+				                                   : (uint32_t)(int32_t)(int8_t)bits;
 			}
-		}
-		else if (width < 4)
-		{
-			int shift = width == 1 ? 24 : 16;
-			outCode2(shl_eax, shift);
-			outCode2(isUnsignedType(idCastType) ? shr_eax : sar_eax, shift);
-			if (pv->fConst)
+			else if (width == 2)
 			{
-				uint32_t value = (uint32_t)pv->ival;
-				value &= width == 1 ? UINT8_MAX : UINT16_MAX;
-				if (!isUnsignedType(idCastType))
-				{
-					value = width == 1 ? (uint32_t)(int32_t)(int8_t)value
-					                   : (uint32_t)(int32_t)(int16_t)value;
-				}
-				pv->ival = (int)value;
+				bits = isUnsignedType(destination) ? (uint32_t)(uint16_t)bits
+				                                   : (uint32_t)(int32_t)(int16_t)bits;
 			}
+			value->ival = (int)bits;
 		}
 	}
-	else if (idCastType == ID.T_DOUBLE && pv->type != ID.T_DOUBLE)
-	{
-		if (!isIntegerType(pv->type))
-		{
-			error("castExpr", "conversion to double requires an arithmetic operand");
-		}
-		if (isUnsignedType(integerPromotion(pv->type)))
-		{
-			outCode1(fild_uax);
-		}
-		else
-		{
-			outCode2(mov_psp_eax, -4);
-			outCode2(fild_dsp, -4);
-		}
-		if (pv->fConst)
-		{
-			pv->rval = isUnsignedType(integerPromotion(pv->type)) ? (double)(uint32_t)pv->ival
-			                                                      : (double)pv->ival;
-		}
-	}
-	else if (idCastType != pv->type)
-	{
-		error("castExpr",
-		      "unsupported cast(casttype=%s type=%s)\n",
-		      toString(idCastType),
-		      toString(pv->type));
-	}
-	semanticIrCast(pv, idCastType, ptr);
-	pv->ptrs = ptr;
-	pv->type = idCastType;
-	pv->objectSize = sizeOfObjectType(idCastType, ptr);
+	value->type = destination;
+	value->ptrs = pointers;
+	value->mode = VAL;
+	value->objectSize = sizeOfObjectType(destination, pointers);
+	value->object = NULL;
+	value->arrayDepth = 0;
 }
 
 /*============================================================================
@@ -1074,46 +720,57 @@ static void unaryExpression(int mode, VALUE *pv)
 	int fNEG = 0, fNOT = 0, fBITNOT = 0, fINC = 0;
 	if (ispp('+') || (fNEG = ispp('-')) || (fNOT = ispp('!')) || (fBITNOT = ispp('~')))
 	{
-		int bgn = ix.ixCode;
+		int wasFloating;
+		int wasUnsigned;
+		double real;
+		uint32_t integer;
 		castExpression(VAL, pv);
-		if (fNEG)
+		wasFloating = isFloatingType(pv->type);
+		wasUnsigned = isUnsignedType(pv->type);
+		real = pv->fConst ? constantReal(pv) : 0.0;
+		integer = (uint32_t)pv->ival;
+		if (fBITNOT && (pv->ptrs > 0 || !isIntegerType(pv->type)))
 		{
-			if (pv->fConst && isIntegerType(pv->type))
-			{
-				cd.pCode[ix.ixCode - 1].num = (pv->ival = -pv->ival);
-			}
-			else if (pv->fConst && pv->type == ID.T_DOUBLE)
-			{
-				cd.pCode[bgn].dval = (pv->rval = -pv->rval);
-			}
-			else
-			{
-				outCode1(pv->type == ID.T_DOUBLE ? fchs : neg_eax);
-			}
+			error("unary expression", "integer operand required for '~'");
 		}
-		else if (fNOT)
+		if (!fNOT && pv->ptrs > 0)
 		{
-			if (pv->fConst)
-			{
-				pv->ival = !pv->ival;
-			}
-			outCode1(test_eax_eax);
-			outCode1(sete_eax);
-		}
-		else if (fBITNOT)
-		{
-			if (!isIntegerType(pv->type))
-			{
-				error("unaryExpr", "integer operand required for '~'");
-			}
-			pv->type = integerPromotion(pv->type);
-			if (pv->fConst)
-			{
-				pv->ival = ~pv->ival;
-			}
-			outCode1(not_eax);
+			error("unary expression", "arithmetic operand required");
 		}
 		semanticIrUnary(fNEG ? '-' : fNOT ? '!' : fBITNOT ? '~' : '+', pv);
+		if (pv->fConst)
+		{
+			if (fNEG && wasFloating)
+			{
+				pv->rval = -real;
+			}
+			else if (fNEG)
+			{
+				if (!wasUnsigned && integer == 0x80000000U)
+				{
+					error("unary expression", "signed negation overflows");
+				}
+				pv->ival = (int)(0U - integer);
+			}
+			else if (fNOT)
+			{
+				pv->ival = real == 0.0;
+			}
+			else if (fBITNOT)
+			{
+				pv->ival = (int)~integer;
+			}
+		}
+		if (fNOT)
+		{
+			pv->type = ID.T_INT;
+			pv->ptrs = 0;
+		}
+		else if (isIntegerType(pv->type))
+		{
+			pv->type = integerPromotion(pv->type);
+		}
+		pv->mode = VAL;
 	}
 	else if ((fINC = is2pp("++")) || is2pp("--"))
 	{
@@ -1404,8 +1061,9 @@ static void constant(VALUE *pv)
 		semanticIrString(pv, literal);
 		break;
 	}
+	case TK_FLOAT:
 	case TK_DOUBLE:
-		setValue(VAL, 0, ID.T_DOUBLE, pv);
+		setValue(VAL, 0, cd.token[ix.tix].type == TK_FLOAT ? ID.T_FLOAT : ID.T_DOUBLE, pv);
 		pv->rval = cd.token[ix.tix++].dval;
 		pv->fConst = TRUE;
 		outDataDouble(pv->rval);
@@ -1492,6 +1150,7 @@ static void primExpr(int mode, VALUE *pv)
 		}
 		ptrs = pv->ptrs;
 		type = pv->type;
+		pName = pv->object;
 		fDone = 1;
 	}
 	else
@@ -1532,8 +1191,14 @@ static void primExpr(int mode, VALUE *pv)
 		loadAddr(pName->addrType, pName->addrType == AD_IMPORT ? hid : pName->address);
 		setValue(ADDR, ptrs, type, pv);
 		semanticIrNameAddress(pv, pName);
+		pv->object = pName;
+		if (pName->addrType == AD_DATA || pName->addrType == AD_ZERO ||
+		    pName->addrType == AD_IMPORT)
+		{
+			pv->constantSymbol = pName->irSymbol;
+		}
 	}
-	depth = 0;
+	depth = pv->arrayDepth;
 	while ((fArray = ispp('[')) || (fDot = ispp('.')) || (fArrow = is2pp("->")))
 	{
 		if (fArray)
@@ -1542,12 +1207,17 @@ static void primExpr(int mode, VALUE *pv)
 
 			memcpy(&baseValue, pv, sizeof(baseValue));
 			ptrs--;
-			size = pName->size[++depth];
+			++depth;
+			if (ptrs < 0 || depth >= 8)
+			{
+				error("primExpr", "subscript requires a pointer or array operand");
+			}
+			size = pName != NULL ? pName->size[depth] : 0;
 			if (size == 0)
 			{
-				size = sizeOfObjectType(pName->dataType, ptrs);
+				size = sizeOfObjectType(type, ptrs);
 			}
-			if (pName->size[depth] == 0)
+			if ((pName == NULL || pName->size[depth] == 0) && baseValue.irValue == IR_VALUE_NONE)
 			{
 				semanticIrLoad(&baseValue);
 				baseValue.irAddress = baseValue.irValue;
@@ -1678,13 +1348,15 @@ static void primExpr(int mode, VALUE *pv)
 			ix.ixCode -= 2;
 		}
 	}
-	else if (pName->arrays <= depth && pName->size[depth + 1] == 0 && mode == VAL)
+	else if ((pName == NULL || (pName->arrays <= depth && pName->size[depth + 1] == 0)) &&
+	         mode == VAL)
 	{
 		loadValue(type, ptrs > 0);
 		pv->mode = ADDR;
 		pv->ptrs = ptrs;
 		pv->type = type;
 		semanticIrLoad(pv);
+		pv->constantSymbol = IR_SYMBOL_NONE;
 	}
 	else if (mode == VAL)
 	{
@@ -1693,11 +1365,95 @@ static void primExpr(int mode, VALUE *pv)
 	pv->mode = mode;
 	pv->ptrs = ptrs;
 	pv->type = type;
+	pv->object = pName;
+	pv->arrayDepth = depth;
 	if (pName != NULL)
 	{
 		pv->objectSize = pName->size[depth] > 0 ? pName->size[depth] : sizeOfObjectType(type, ptrs);
 		pv->callable = pName->isFunctionPointer ? pName : NULL;
 	}
+}
+
+static int variadicBuiltin(VALUE *value)
+{
+	const char *name = toString(cd.token[ix.tix].ival);
+	IrOpcode opcode;
+	VALUE state;
+	VALUE source;
+	IrValueId right = IR_VALUE_NONE;
+	int resultType = ID.T_VOID;
+	int resultPointers = 0;
+	if (strcmp(name, "__builtin_va_start") == 0)
+	{
+		opcode = IR_OP_VA_START;
+	}
+	else if (strcmp(name, "__builtin_va_arg") == 0)
+	{
+		opcode = IR_OP_VA_ARGUMENT;
+	}
+	else if (strcmp(name, "__builtin_va_copy") == 0)
+	{
+		opcode = IR_OP_VA_COPY;
+	}
+	else if (strcmp(name, "__builtin_va_end") == 0)
+	{
+		opcode = IR_OP_VA_END;
+	}
+	else
+	{
+		return FALSE;
+	}
+	++ix.tix;
+	skip('(');
+	assignExpression(VAL, &state);
+	if (state.ptrs == 0)
+	{
+		error("stdarg", "variadic state requires an address");
+	}
+	if (opcode == IR_OP_VA_ARGUMENT)
+	{
+		skip(',');
+		typeSpecifier();
+		resultType = var.type;
+		while (ispp('*'))
+		{
+			++resultPointers;
+		}
+		resultPointers += getPtr(resultType);
+		if (resultPointers == 0 && (canonicalType(resultType) == ID.T_FLOAT ||
+		                            (isIntegerType(resultType) && sizeOfDataType(resultType) < 4)))
+		{
+			error("stdarg", "va_arg must request the default-promoted argument type");
+		}
+	}
+	else if (opcode != IR_OP_VA_END)
+	{
+		skip(',');
+		assignExpression(VAL, &source);
+		if (source.ptrs == 0)
+		{
+			error("stdarg", "variadic source requires an address");
+		}
+		if (opcode == IR_OP_VA_COPY)
+		{
+			right = source.irValue;
+		}
+		else if (compiler.irBuilder.function == NULL || !compiler.irBuilder.function->isVariadic)
+		{
+			error("stdarg", "va_start requires a variadic function definition");
+		}
+	}
+	skip(')');
+	setValue(VAL, resultPointers, resultType, value);
+	if (semanticIrActive())
+	{
+		value->irValue = irBuilderEmitVariadic(&compiler.irBuilder,
+		                                       opcode,
+		                                       irTypeForCObject(resultType, resultPointers),
+		                                       state.irValue,
+		                                       right);
+	}
+	return TRUE;
 }
 
 static void primaryExpression(int mode, VALUE *pv)
@@ -1706,6 +1462,10 @@ static void primaryExpression(int mode, VALUE *pv)
 	                        ? getNameFromAllTable(cd.currTable, NM_VAR, cd.token[ix.tix].ival)
 	                        : NULL;
 
+	if (cd.token[ix.tix].type == TK_NAME && variadicBuiltin(pv))
+	{
+		return;
+	}
 	if (cd.token[ix.tix].type >= TK_STRING)
 	{
 		constant(pv);

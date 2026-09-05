@@ -136,8 +136,34 @@ int canonicalType(int type)
 	return type;
 }
 
+int isFloatingType(int type)
+{
+	type = canonicalType(type);
+	return type == ID.T_FLOAT || type == ID.T_DOUBLE;
+}
+
+int arithmeticType(int left, int right)
+{
+	left = canonicalType(left);
+	right = canonicalType(right);
+	if (left == ID.T_DOUBLE || right == ID.T_DOUBLE)
+	{
+		return ID.T_DOUBLE;
+	}
+	if (left == ID.T_FLOAT || right == ID.T_FLOAT)
+	{
+		return ID.T_FLOAT;
+	}
+	return usualIntegerType(left, right);
+}
+
 int sizeOfDataType(int type)
 {
+	Name *alias = getStruct(type);
+	if (alias != NULL && (alias->type & NM_TYPEDEF) != 0 && alias->arrays > 0)
+	{
+		return alias->size[0];
+	}
 	type = canonicalType(type);
 	if (type == ID.T_BOOL || type == ID.T_CHAR || type == ID.T_SCHAR || type == ID.T_UCHAR ||
 	    type == ID.T_VOID)
@@ -220,7 +246,10 @@ IrType irTypeForCObject(int type, int pointers)
 	}
 	if (getStruct(canonical) != NULL && size <= sizeof(int))
 	{
-		return irTypeInteger(size * CHAR_BIT, TRUE, size);
+		IrType aggregate =
+		    irTypeInteger(size * CHAR_BIT, TRUE, (unsigned int)alignmentOfObjectType(canonical, 0));
+		aggregate.kind = IR_TYPE_AGGREGATE;
+		return aggregate;
 	}
 	error("parser", "type '%s' (size %u) is not a scalar IR type", toString(canonical), size);
 }
@@ -237,7 +266,7 @@ int isUnsignedType(int type)
 {
 	type = canonicalType(type);
 	return type == ID.T_BOOL || type == ID.T_UCHAR || type == ID.T_USHORT || type == ID.T_UINT ||
-	       type == ID.T_ULONG;
+	       type == ID.T_ULONG || (type == ID.T_CHAR && cmd.target->dataLayout.plainCharUnsigned);
 }
 
 int integerPromotion(int type)
@@ -328,18 +357,31 @@ static void createNameTable(int idFunc)
 
 static void deleteNameTable(void)
 {
+	int index;
+	HASH *names = &cd.block[cd.currTable].hash;
 	if (opt & oNAME)
 	{
 		printNameTable(cd.currTable);
+	}
+	for (index = 0; index < names->size; ++index)
+	{
+		if (names->tbl[index].state == 1U && names->tbl[index].val != NULL)
+		{
+			Name *name = names->tbl[index].val;
+			free(name->argpt);
+		}
 	}
 	hashFree(&cd.block[cd.currTable--].hash);
 }
 
 static Name *newName(int type, int dataType, int name, int addrType, int address)
 {
-	Name buf = {type, name, dataType, addrType, address};
 	Name *pNew = xalloc(sizeof(Name));
-	memcpy(pNew, &buf, sizeof(Name));
+	pNew->type = type;
+	pNew->idName = name;
+	pNew->dataType = dataType;
+	pNew->addrType = addrType;
+	pNew->address = address;
 	pNew->argc = -1;
 	pNew->irLocal = IR_LOCAL_NONE;
 	pNew->irSymbol = addrType == AD_STACK ? IR_SYMBOL_NONE : name;
@@ -610,6 +652,12 @@ void typeSpecifier(void)
 static Name *defineTypeAlias(int aliasId, int underlyingType, int pointers, int size)
 {
 	Name *alias;
+	if (aliasId == ID.T_INT || aliasId == ID.T_CHAR || aliasId == ID.T_SHORT ||
+	    aliasId == ID.T_FLOAT || aliasId == ID.T_DOUBLE || aliasId == ID.T_VOID ||
+	    aliasId == ID.T_BOOL)
+	{
+		error("typedef", "reserved type name cannot be redefined: %s", toString(aliasId));
+	}
 	if (getStruct(aliasId) != NULL)
 	{
 		error("typedef", "redefinition of typedef '%s'", toString(aliasId));
@@ -632,16 +680,22 @@ static void typedefDeclaration(void)
 	underlyingType = var.type;
 	do
 	{
+		Name *alias;
+		int dimension;
 		var.type = underlyingType;
 		varDeclarator(FALSE);
 		if (var.id < 0)
 		{
 			error("typedef", "typedef name expected");
 		}
-		(void)defineTypeAlias(var.id,
-		                      underlyingType,
-		                      var.pointers + var.arrays + getPtr(underlyingType),
-		                      var.width * var.length);
+		alias = defineTypeAlias(
+		    var.id, var.type, var.pointers + getPtr(var.type), var.width * var.length);
+		alias->arrays = var.arrays;
+		alias->size[var.arrays] = var.width;
+		for (dimension = var.arrays - 1; dimension >= 0; --dimension)
+		{
+			alias->size[dimension] = var.size[dimension] * alias->size[dimension + 1];
+		}
 	} while (ispp(','));
 	skip(';');
 }
@@ -823,8 +877,12 @@ static int varDeclarator(int fParam)
 		var.id = cd.token[ix.tix++].ival;
 	}
 	memset(&var.size, 0, sizeof(var.size));
-	for (var.arrays = 0; var.arrays < 8 && ix.tix < cd.nToken && ispp('['); var.arrays++)
+	for (var.arrays = 0; ix.tix < cd.nToken && ispp('['); var.arrays++)
 	{
+		if (var.arrays >= 7)
+		{
+			error("declarator", "array rank exceeds seven dimensions");
+		}
 		if (is(']'))
 		{
 			if (!fParam)
@@ -834,7 +892,16 @@ static int varDeclarator(int fParam)
 		}
 		else
 		{
-			var.size[var.arrays] = constIntExpression();
+			Variable declaration;
+			int extent;
+			memcpy(&declaration, &var, sizeof(var));
+			extent = constIntExpression();
+			memcpy(&var, &declaration, sizeof(var));
+			if (extent <= 0)
+			{
+				error("declarator", "array extent must be positive");
+			}
+			var.size[var.arrays] = extent;
 		}
 		skip(']');
 	}
@@ -859,6 +926,23 @@ static int varDeclarator(int fParam)
 		memcpy(&var, &varSave, sizeof(var));
 		memcpy(var.size, inferredSize, sizeof(var.size));
 		memcpy(&ix, &ixSave, sizeof(ix));
+	}
+	{
+		Name *alias = getStruct(var.type);
+		if (alias != NULL && (alias->type & NM_TYPEDEF) != 0 && alias->arrays > 0)
+		{
+			int dimension;
+			if (var.arrays + alias->arrays >= 8 || var.pointers != 0)
+			{
+				error("declarator", "unsupported pointer-to-array or excessive array rank");
+			}
+			for (dimension = 0; dimension < alias->arrays; ++dimension)
+			{
+				var.size[var.arrays++] = alias->size[dimension] / alias->size[dimension + 1];
+			}
+			var.type = alias->idName;
+			var.pointers = alias->ptrs;
+		}
 	}
 	if (fParam)
 	{
@@ -959,23 +1043,32 @@ static void writeStaticInteger(int addressType, int address, uint32_t value, siz
 	writeStaticBytes(addressType, address, bytes, size);
 }
 
-static void writeStaticDouble(int addressType, int address, double value)
+static void writeStaticFloat(int addressType, int address, double value, int width)
 {
 	unsigned char bytes[sizeof(double)];
+	size_t size = (size_t)width;
 	unsigned int byteOrderProbe = 1U;
 	int hostLittleEndian = *(unsigned char *)&byteOrderProbe != 0;
 	size_t index;
-	memcpy(bytes, &value, sizeof(bytes));
+	if (width == 4)
+	{
+		float single = (float)value;
+		memcpy(bytes, &single, size);
+	}
+	else
+	{
+		memcpy(bytes, &value, size);
+	}
 	if (hostLittleEndian != cmd.target->dataLayout.littleEndian)
 	{
-		for (index = 0; index < sizeof(bytes) / 2U; ++index)
+		for (index = 0; index < size / 2U; ++index)
 		{
 			unsigned char temporary = bytes[index];
-			bytes[index] = bytes[sizeof(bytes) - index - 1U];
-			bytes[sizeof(bytes) - index - 1U] = temporary;
+			bytes[index] = bytes[size - index - 1U];
+			bytes[size - index - 1U] = temporary;
 		}
 	}
-	writeStaticBytes(addressType, address, bytes, sizeof(bytes));
+	writeStaticBytes(addressType, address, bytes, size);
 }
 
 static void addStaticRelocation(int addressType, int address, IrSymbolId symbol, int addend)
@@ -1030,8 +1123,20 @@ static void initMember(Name *pName, int atype, int depth, int addr)
 			else
 			{
 				constExpression(&v2);
-				outDataInt(v2.ival);
-				writeStaticInteger(atype, addr, (uint32_t)v2.ival, 4U);
+				outDataInt(0);
+				if (v2.constantSymbol != IR_SYMBOL_NONE)
+				{
+					addStaticRelocation(atype, addr, v2.constantSymbol, v2.constantOffset);
+				}
+				else if (v2.fConst && v2.ival == 0 &&
+				         (isIntegerType(v2.type) || (v2.ptrs > 0 && v2.type == ID.T_VOID)))
+				{
+					writeStaticInteger(atype, addr, 0U, (size_t)sizeOfPointer());
+				}
+				else
+				{
+					error("initMember", "pointer initializer requires an address or null constant");
+				}
 			}
 		}
 		else
@@ -1050,16 +1155,27 @@ static void initMember(Name *pName, int atype, int depth, int addr)
 			{
 				error("initMember", "constant expression expected");
 			}
-			else if (v1.type == ID.T_DOUBLE)
+			else if (isFloatingType(v1.type))
 			{
-				double value = v2.type == ID.T_DOUBLE ? v2.rval : (double)v2.ival;
+				double value = isFloatingType(v2.type)   ? v2.rval
+				               : isUnsignedType(v2.type) ? (double)(uint32_t)v2.ival
+				                                         : (double)v2.ival;
+				int width = sizeOfDataType(v1.type);
 
-				outDataDouble(value);
-				writeStaticDouble(atype, addr, value);
+				if (width == 8)
+				{
+					outDataDouble(value);
+				}
+				else
+				{
+					outDataInt(0);
+				}
+				writeStaticFloat(atype, addr, value, width);
 			}
 			else if (v1.ptrs - depth > 0)
 			{
-				if (!isIntegerType(v2.type) || v2.ival != 0)
+				if ((!isIntegerType(v2.type) && !(v2.ptrs > 0 && v2.type == ID.T_VOID)) ||
+				    v2.ival != 0)
 				{
 					error("initMember", "pointer initializer is not a null pointer constant");
 				}
@@ -1157,14 +1273,38 @@ static void initializer(Name *pName, int atype, int depth, int addr)
 			unsigned char *executionBytes =
 			    semanticIrDecodeExecutionString(toString(ival), &executionSize);
 
-			if (executionSize > (size_t)pName->size[depth])
+			if (executionSize - 1U > (size_t)pName->size[depth])
 			{
 				free(executionBytes);
 				error("init'r", "initializer-string too long");
 			}
 			if (atype != AD_STACK)
 			{
-				writeStaticBytes(atype, addr, executionBytes, executionSize);
+				size_t storedSize = executionSize > (size_t)pName->size[depth]
+				                        ? (size_t)pName->size[depth]
+				                        : executionSize;
+				writeStaticBytes(atype, addr, executionBytes, storedSize);
+			}
+			else
+			{
+				Name *storage = findStackStorage(addr);
+				if (storage == NULL)
+				{
+					error("initializer", "local string has no storage object");
+				}
+				for (n = 0; n < pName->size[depth]; ++n)
+				{
+					VALUE destination;
+					VALUE character;
+					setValue(ADDR, 0, ID.T_UCHAR, &destination);
+					semanticIrLocalAddress(
+					    &destination, storage->irLocal, addr - storage->address + n);
+					setValue(VAL, 0, ID.T_UCHAR, &character);
+					character.ival = (size_t)n < executionSize ? executionBytes[n] : 0;
+					character.fConst = TRUE;
+					semanticIrConstantInteger(&character);
+					semanticIrBinary('=', &destination, &character);
+				}
 			}
 			free(executionBytes);
 			if (atype == AD_DATA)
@@ -1175,7 +1315,7 @@ static void initializer(Name *pName, int atype, int depth, int addr)
 			{
 				int size = pName->size[depth] / pName->size[depth + 1];
 				int length = decodedStringLength(toString(ival)) + 1;
-				if (length > size)
+				if (length - 1 > size)
 				{
 					error("init'r", "initializer-string too long");
 				}
@@ -1340,13 +1480,20 @@ static void variableDeclaration(Name *pStruct, int status)
 		else
 		{
 			int isUnion = (pStruct->type & NM_UNION) != 0;
+			int limit = cmd.target->dataLayout.subsequentMemberAlignmentLimit;
+			if (!isUnion && pStruct->pBgn != NULL && limit != 0 && var.alignment > limit)
+			{
+				var.alignment = limit;
+			}
 			if (!isUnion)
 			{
 				cd.offset = align(cd.offset, var.alignment);
 			}
 			pName = xalloc(sizeof(Name));
-			Name buf = {NM_ATTR, var.id, var.type, 0, isUnion ? 0 : cd.offset};
-			memcpy(pName, &buf, sizeof(Name));
+			pName->type = NM_ATTR;
+			pName->idName = var.id;
+			pName->dataType = var.type;
+			pName->address = isUnion ? 0 : cd.offset;
 			if (pStruct->pBgn == NULL)
 			{
 				pStruct->pBgn = pName;
@@ -1524,7 +1671,9 @@ static void structDeclaration(void)
 	}
 	pName->ptrs = ispp('*');
 	int nameId = cd.token[ix.tix++].ival;
-	alias = newName(NM_STRUCT | NM_TYPEDEF | (isUnion ? NM_UNION : 0), nameId, tagId, -1, 0);
+	alias = nameId == tagId
+	            ? pName
+	            : newName(NM_STRUCT | NM_TYPEDEF | (isUnion ? NM_UNION : 0), nameId, tagId, -1, 0);
 	alias->ptrs = pName->ptrs;
 	alias->size[0] = pName->size[0];
 	alias->alignment = pName->alignment;
@@ -1704,6 +1853,8 @@ static void functionDefinition(void)
 	pName->argc = argc;
 	fixedParameterCount = argc > 0 && argpt[argc - 1].type == ID.DOTS3 ? argc - 1 : argc;
 	int sizeRet = callConv == NM_WINAPI ? (cd.baseSpace - 8) : 0;
+	free(pName->argpt);
+	pName->argpt = NULL;
 	if (argc > 0)
 	{
 		pName->argpt = calloc(argc, sizeof(PTRS_TYPE));
@@ -2294,11 +2445,11 @@ static void init(void)
 			}
 		}
 	}
-	for (n = 0; n < sizeof(dataType) / sizeof(Keyword); n++)
+	for (n = 0; (size_t)n < sizeof(dataType) / sizeof(Keyword); n++)
 	{
 		*(dataType[n].id) = hashPut(dataType[n].name, (void *)AT_TYPE, &cd.hash);
 	}
-	for (n = 0; n < sizeof(keyword) / sizeof(Keyword); n++)
+	for (n = 0; (size_t)n < sizeof(keyword) / sizeof(Keyword); n++)
 	{
 		*(keyword[n].id) = hashPut(keyword[n].name, NULL, &cd.hash);
 	}

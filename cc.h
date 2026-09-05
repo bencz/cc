@@ -268,6 +268,8 @@ typedef struct _VALUE
 	IrSymbolId constantSymbol;
 	int constantOffset;
 	const Name *callable;
+	Name *object;
+	int arrayDepth;
 } VALUE;
 
 typedef struct _CODE
@@ -396,6 +398,8 @@ int ispp(int id);
 int is2pp(char *op);
 void skip(int id);
 int sizeOfDataType(int type);
+int isFloatingType(int type);
+int arithmeticType(int left, int right);
 int sizeOfPointer(void);
 int sizeOfObjectType(int type, int pointers);
 int alignmentOfObjectType(int type, int pointers);
@@ -519,6 +523,7 @@ void peLoadExportSymbols(const char *path,
 /* z/OS output */
 
 void hlasm_link(const char *output_file);
+const char *zosRuntimeSource(void);
 void zos_write_jcl(const char *assembly_file, const char *jcl_file);
 unsigned char hlasmExecutionByte(unsigned char ascii);
 
@@ -713,6 +718,12 @@ enum
 	fld_qcx,
 	fld_qbp,
 	fld_qp,
+	fld_sax,
+	fld_sbp,
+	fstp_sbp,
+	fstp_scx,
+	fstp_qcx,
+	fstp_ssp,
 	fldcw,
 	fstp_qsp,
 	fstsw,

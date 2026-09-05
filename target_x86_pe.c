@@ -20,6 +20,14 @@ static void addTargetStartup(CompilerContext *context)
 {
 	int line = 3;
 	(void)context;
+	if (mcc.typeApp == 0)
+	{
+		preproAddSyntheticLine(
+		    "int WINAPI _main(void *module, unsigned long reason, void *reserved) {", line++);
+		preproAddSyntheticLine("  return 1;", line++);
+		preproAddSyntheticLine("}", line);
+		return;
+	}
 	preproAddSyntheticLine("void _main() {", line++);
 	if (mcc.typeApp == 3)
 	{
@@ -69,7 +77,7 @@ const TargetDescriptor targetX86Pe = {
     "x86-pe",
     ".exe",
     ".dll",
-    {4, 4, 2, 4, 4, 4, 8, 1},
+    {4, 4, 2, 4, 4, 4, 8, 1, 0, 0},
     1,
     0,
     0,

@@ -21,6 +21,8 @@ typedef struct _TargetDataLayout
 	unsigned char floatSize;
 	unsigned char doubleSize;
 	unsigned char littleEndian;
+	unsigned char subsequentMemberAlignmentLimit;
+	unsigned char plainCharUnsigned;
 } TargetDataLayout;
 
 typedef struct _TargetDescriptor
@@ -46,5 +48,7 @@ void targetValidate(const TargetDescriptor *target);
 
 extern const TargetDescriptor targetX86Pe;
 extern const TargetDescriptor targetZosHlasm;
+extern const TargetDescriptor targetPpcLinux;
+extern const TargetDescriptor targetPpcAix;
 
 #endif /* CC_TARGET_H */

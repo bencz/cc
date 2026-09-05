@@ -98,27 +98,28 @@ static void storeInteger(IrValueId value)
 static void loadFloat(IrValueId value)
 {
 	IrType type = valueType(value);
-	if (type.kind != IR_TYPE_FLOAT || type.bits != 64U)
+	if (type.kind != IR_TYPE_FLOAT || (type.bits != 32U && type.bits != 64U))
 	{
 		error("x86 IR", "only IEEE binary64 values are supported");
 	}
-	outCode3(fld_qbp, xs.function.valueOffsets[value], AD_STACK);
+	outCode3(type.bits == 32U ? fld_sbp : fld_qbp, xs.function.valueOffsets[value], AD_STACK);
 }
 
 static void storeFloat(IrValueId value)
 {
-	outCode3(fstp_qbp, xs.function.valueOffsets[value], AD_STACK);
+	IrType type = valueType(value);
+	outCode3(type.bits == 32U ? fstp_sbp : fstp_qbp, xs.function.valueOffsets[value], AD_STACK);
 }
 
 static void loadIndirect(IrType type)
 {
 	if (type.kind == IR_TYPE_FLOAT)
 	{
-		if (type.bits != 64U)
+		if (type.bits != 32U && type.bits != 64U)
 		{
 			error("x86 IR", "only IEEE binary64 loads are supported");
 		}
-		outCode1(fld_qax);
+		outCode1(type.bits == 32U ? fld_sax : fld_qax);
 	}
 	else if (type.bits == 32U)
 	{
@@ -441,6 +442,47 @@ static int parameterOffset(const IrFunction *function, int parameterIndex)
 	return offset;
 }
 
+static void emitVariadic(const IrInstruction *instruction)
+{
+	loadInteger(instruction->left);
+	outCode1(mov_ecx_eax);
+	if (instruction->opcode == IR_OP_VA_START)
+	{
+		outCode3(lea_eax_pbp,
+		         parameterOffset(xs.function.function, xs.function.function->parameterCount),
+		         AD_STACK);
+		outCode1(mov_pcx_eax);
+	}
+	else if (instruction->opcode == IR_OP_VA_COPY)
+	{
+		loadInteger(instruction->right);
+		outCode1(mov_eax_pax);
+		outCode1(mov_pcx_eax);
+	}
+	else if (instruction->opcode == IR_OP_VA_END)
+	{
+		outCode2(mov_eax, 0);
+		outCode1(mov_pcx_eax);
+	}
+	else
+	{
+		outCode1(mov_eax_pax);
+		outCode1(push_eax);
+		outCode2(add_eax, alignUp(typeSize(instruction->type), 4));
+		outCode1(mov_pcx_eax);
+		outCode1(pop_eax);
+		loadIndirect(instruction->type);
+		if (instruction->type.kind == IR_TYPE_FLOAT)
+		{
+			storeFloat(instruction->result);
+		}
+		else
+		{
+			storeInteger(instruction->result);
+		}
+	}
+}
+
 static void emitCall(const IrInstruction *instruction)
 {
 	int argumentIndex;
@@ -452,9 +494,9 @@ static void emitCall(const IrInstruction *instruction)
 		if (type.kind == IR_TYPE_FLOAT)
 		{
 			loadFloat(argument);
-			outCode2(sub_esp, 8);
-			outCode1(fstp_qsp);
-			argumentBytes += 8;
+			outCode2(sub_esp, typeSize(type));
+			outCode1(type.bits == 32U ? fstp_ssp : fstp_qsp);
+			argumentBytes += typeSize(type);
 		}
 		else
 		{
@@ -496,7 +538,9 @@ static void emitInstruction(const IrInstruction *instruction)
 	case IR_OP_PARAMETER:
 		if (instruction->type.kind == IR_TYPE_FLOAT)
 		{
-			outCode3(fld_qbp, parameterOffset(xs.function.function, instruction->offset), AD_STACK);
+			outCode3(instruction->type.bits == 32U ? fld_sbp : fld_qbp,
+			         parameterOffset(xs.function.function, instruction->offset),
+			         AD_STACK);
 			storeFloat(instruction->result);
 		}
 		else
@@ -545,8 +589,7 @@ static void emitInstruction(const IrInstruction *instruction)
 		if (instruction->type.kind == IR_TYPE_FLOAT)
 		{
 			loadFloat(instruction->right);
-			outCode1(fst_qcx);
-			outCode1(fstp_st1);
+			outCode1(instruction->type.bits == 32U ? fstp_scx : fstp_qcx);
 		}
 		else
 		{
@@ -629,6 +672,12 @@ static void emitInstruction(const IrInstruction *instruction)
 	case IR_OP_CALL_INDIRECT:
 		emitCall(instruction);
 		break;
+	case IR_OP_VA_START:
+	case IR_OP_VA_ARGUMENT:
+	case IR_OP_VA_COPY:
+	case IR_OP_VA_END:
+		emitVariadic(instruction);
+		break;
 	case IR_OP_BRANCH:
 		outCode2(jmp, xs.function.blockLocations[instruction->trueBlock]);
 		break;
@@ -696,7 +745,9 @@ static void layoutFunction(const IrFunction *function)
 		}
 	}
 	xs.function.frameSize = alignUp(offset, 4);
-	for (parameterIndex = 0; parameterIndex < function->parameterCount; ++parameterIndex)
+	for (parameterIndex = 0;
+	     function->callingConvention == IR_CALL_WINAPI && parameterIndex < function->parameterCount;
+	     ++parameterIndex)
 	{
 		xs.function.returnBytes += alignUp(typeSize(function->parameterTypes[parameterIndex]), 4);
 	}
@@ -712,7 +763,10 @@ static void freeFunctionLayout(void)
 
 static void appendDataRelocation(int offset, int addressType, IrSymbolId symbol, int addend)
 {
-	INSTRUCT instruction = {setaddr, symbol, addressType};
+	INSTRUCT instruction = {0};
+	instruction.inst = setaddr;
+	instruction.num = symbol;
+	instruction.attr = addressType;
 
 	instruction.offset = offset;
 	instruction.refs = addend;
@@ -869,9 +923,20 @@ void x86LowerIr(void)
 		layoutFunction(function);
 		outCode2(function->isExported ? exp_ : fn_, functionLinkerSymbol(function->symbol));
 		outCode1(xent);
-		if (xs.function.frameSize > 0)
+		if (xs.function.frameSize >= 4096)
 		{
-			outCode2(sub_esp, xs.function.frameSize);
+			int probe = loc();
+			outCode2(mov_ecx, xs.function.frameSize / 4096);
+			outCode2(loc_, probe);
+			outCode2(sub_esp, 4096);
+			outCode2(mov_eax_psp, 0);
+			outCode2(add_ecx, -1);
+			outCode2(jnz, probe);
+		}
+		if (xs.function.frameSize % 4096 != 0)
+		{
+			outCode2(sub_esp, xs.function.frameSize % 4096);
+			outCode2(mov_eax_psp, 0);
 		}
 		for (blockIndex = 0; blockIndex < function->blockCount; ++blockIndex)
 		{
